@@ -2,7 +2,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
 from model import (
@@ -184,30 +183,42 @@ vertices = price_vertices(consumers, s)
 if vertices.empty:
     st.warning("No non-negative price vertices were generated under the current calibration.")
 else:
-    fig = px.scatter(
-        vertices,
-        x="p_regular",
-        y="p_premium",
-        hover_data=["hyperplane_1", "hyperplane_2"],
-        labels={
-            "p_regular": "p₀ — Regular price",
-            "p_premium": "p₁ — Premium price",
-        },
-        title="Theoretical price-space vertices + observed prices",
+    chart_vertices = vertices[["p_regular", "p_premium"]].copy()
+    chart_vertices.columns = ["Regular price", "Premium price"]
+    chart_observed = df[["p_regular", "p_premium"]].copy()
+    chart_observed.columns = ["Regular price", "Premium price"]
+
+    st.caption("Model vertices")
+    st.scatter_chart(
+        chart_vertices,
+        x="Regular price",
+        y="Premium price",
+        height=420,
     )
-    obs = df[["p_regular", "p_premium"]].drop_duplicates()
-    fig.add_scatter(
-        x=obs.p_regular,
-        y=obs.p_premium,
-        mode="markers",
-        name="Observed weekly prices",
-        marker_symbol="x",
-        marker_size=10,
+    st.caption("Observed weekly price combinations")
+    st.dataframe(
+        chart_observed.assign(
+            **{
+                "Empirical threshold": np.where(
+                    chart_observed["Premium price"] > 81,
+                    "A — High Premium / H3 Exit",
+                    np.where(
+                        (chart_observed["Premium price"] >= 80)
+                        & (chart_observed["Premium price"] <= 81)
+                        & (chart_observed["Regular price"] <= 55),
+                        "B — Intermediate / H3 Premium",
+                        np.where(
+                            chart_observed["Premium price"] <= 75,
+                            "C — Low Premium / Premium Adoption",
+                            "Outside core regions",
+                        ),
+                    ),
+                )
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
     )
-    # Empirical switching thresholds requested in the analysis.
-    fig.add_hline(y=75, line_dash="dash", annotation_text="p₁ = 75")
-    fig.add_hline(y=81, line_dash="dash", annotation_text="p₁ = 81")
-    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("2A. Bounding & indifference hyperplanes")
 st.dataframe(
@@ -403,23 +414,9 @@ if c and ci:
         hide_index=True,
     )
 
-    plot_df = comparison.melt(
-        id_vars="Outcome",
-        value_vars=["Regular price", "Premium price"],
-        var_name="Type",
-        value_name="Price",
-    )
-    st.plotly_chart(
-        px.bar(
-            plot_df,
-            x="Outcome",
-            y="Price",
-            color="Type",
-            barmode="group",
-            title="Observed vs. Scenario C / CI prices",
-        ),
-        use_container_width=True,
-    )
+    chart_comparison = comparison.set_index("Outcome")[["Regular price", "Premium price"]]
+    st.bar_chart(chart_comparison, height=350)
+
 
     a, b = st.columns(2)
     a.metric("Mean observed → C price distance", f"{summary['Distance → C'].mean():.2f}")
