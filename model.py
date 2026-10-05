@@ -4,7 +4,6 @@ from itertools import combinations
 from math import log
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize_scalar
 
 @dataclass
 class ConsumerParams:
@@ -27,7 +26,11 @@ def _estimate_mu_delta(q0,q1,p0,p1,b0,b1,s=2.0):
     def loss(delta):
         z=((b1-b0)+delta*s-rel)/10.0
         return float(np.sum(np.logaddexp(0,-z)*y+np.logaddexp(0,z)*(1-y))+0.05*delta**2)
-    delta=float(minimize_scalar(loss,bounds=(-100,100),method="bounded").x)
+    # Deterministic grid search keeps the deployed app lightweight and
+    # avoids a SciPy runtime dependency in Streamlit Community Cloud.
+    grid = np.linspace(-100.0, 100.0, 4001)
+    losses = np.array([loss(float(x)) for x in grid])
+    delta = float(grid[int(np.argmin(losses))])
     pred=((b1-b0)+delta*s-rel)>=0; active=(q0+q1)>0
     acc=float((pred[active]==(q1>0)[active]).mean()) if active.any() else 0.0
     return delta,acc
