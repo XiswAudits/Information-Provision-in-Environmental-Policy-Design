@@ -219,81 +219,106 @@ st.caption(
 # ---------------------------------------------------------------------------
 st.header("2. Inferred Price-Space Partitioning & Vertices")
 st.markdown(
-    "This is the part of the app where the geometry should be visible. "
-    "The lines are the actual calibrated bounding and indifference hyperplanes; "
-    "their intersections are the model's price vertices. The observed weeks "
-    "and scenario equilibria are overlaid so every point has a clear meaning."
+    "The paper's price-space method answers one question: **at which combinations "
+    "of Regular and Premium prices can consumer choices change?** For two products, "
+    "we work in a two-dimensional plane: x = Regular price (p₀), y = Premium price (p₁)."
 )
 
 hp = hyperplanes(consumers, s)
 vertices = price_vertices(consumers, s)
 
-# Build a readable plotting window around the observed data and model vertices.
-all_x = list(df.p_regular.astype(float))
-all_y = list(df.p_premium.astype(float))
-if not vertices.empty:
-    all_x += list(vertices.p_regular.astype(float))
-    all_y += list(vertices.p_premium.astype(float))
-x_min = 0.0
-x_max = max(all_x) * 1.05
-y_min = 0.0
-y_max = max(all_y) * 1.05
+# A stable, readable plotting window. Keep the axes tied to the observed market
+# plus the relevant model boundaries rather than letting a few extreme vertices
+# dominate the visual.
+obs_x_max = float(df.p_regular.max())
+obs_y_max = float(df.p_premium.max())
+positive_vertices = vertices[(vertices.p_regular > 0) & (vertices.p_premium > 0)].copy()
+x_max = max(obs_x_max, float(positive_vertices.p_regular.max()) if not positive_vertices.empty else 0.0) * 1.08
+y_max = max(obs_y_max, float(positive_vertices.p_premium.max()) if not positive_vertices.empty else 0.0) * 1.08
+x_min, y_min = 0.0, 0.0
 
-# Hyperplanes -> explicit line segments in the plotting window.
+st.subheader("2A. Bounding & indifference hyperplanes")
+st.info(
+    "**How to read the geometry**\n\n"
+    "• **Vertical line = Regular affordability boundary.** To the left of it, "
+    "that household can afford Regular; to the right, Regular gives negative utility "
+    "and the household exits that option.\n\n"
+    "• **Horizontal line = Premium affordability boundary.** Below it, Premium is "
+    "affordable; above it, Premium gives negative utility.\n\n"
+    "• **Diagonal line = Regular/Premium indifference boundary.** On this line, "
+    "the household gets exactly the same utility from Regular and Premium. "
+    "Crossing the line can change which product the model predicts.\n\n"
+    "• **◆ Vertex = intersection of two boundaries.** These intersections are the "
+    "candidate price points used by the paper's finite price-space solution.\n\n"
+    "The shaded/segmented lines are therefore not demand curves. They are **choice "
+    "boundaries in price space**."
+)
+
+st.latex(r"\text{Regular affordability: }\quad p_0=\frac{b_{j0}+\mu_{j0}^{s}s}{d_{j0}}")
+st.latex(r"\text{Premium affordability: }\quad p_1=\frac{b_{j1}+\mu_{j1}^{s}s}{d_{j1}}")
+st.latex(
+    r"\text{Indifference: }\quad "
+    r"p_0d_{j0}-p_1d_{j1}=(b_{j0}-b_{j1})+(\mu_{j0}^{s}-\mu_{j1}^{s})s"
+)
+
+# Give the user a concrete example rather than asking them to infer the meaning
+# from a dense equation table.
+if not positive_vertices.empty:
+    example_v = positive_vertices.iloc[0]
+    st.success(
+        f"**Example:** {example_v['p_regular']:.2f} Regular and "
+        f"{example_v['p_premium']:.2f} Premium is a model vertex because it is "
+        f"the intersection of **{example_v['hyperplane_1']}** and "
+        f"**{example_v['hyperplane_2']}**. At a vertex, multiple choice/affordability "
+        "boundaries meet."
+    )
+
+# Build line segments with simple ASCII field names. This avoids Altair field
+# parsing problems with Unicode subscripts and makes the scenario overlay robust.
 line_rows = []
 for idx, r in hp.iterrows():
-    kind = r["kind"]
-    if kind == "Bounding":
+    if r["kind"] == "Bounding":
         if abs(r["a"]) > 1e-12:
-            x = r["rhs"] / r["a"]
+            x = float(r["rhs"] / r["a"])
             if x_min <= x <= x_max:
                 line_rows += [
-                    {"line": f"B{idx+1} · {r['household']} · Regular affordability", "x": x, "y": y_min},
-                    {"line": f"B{idx+1} · {r['household']} · Regular affordability", "x": x, "y": y_max},
+                    {"line_id": f"B{idx+1}", "x": x, "y": y_min,
+                     "description": f"B{idx+1}: {r['household']} Regular affordability"},
+                    {"line_id": f"B{idx+1}", "x": x, "y": y_max,
+                     "description": f"B{idx+1}: {r['household']} Regular affordability"},
                 ]
         elif abs(r["b"]) > 1e-12:
-            y = r["rhs"] / r["b"]
+            y = float(r["rhs"] / r["b"])
             if y_min <= y <= y_max:
                 line_rows += [
-                    {"line": f"B{idx+1} · {r['household']} · Premium affordability", "x": x_min, "y": y},
-                    {"line": f"B{idx+1} · {r['household']} · Premium affordability", "x": x_max, "y": y},
+                    {"line_id": f"B{idx+1}", "x": x_min, "y": y,
+                     "description": f"B{idx+1}: {r['household']} Premium affordability"},
+                    {"line_id": f"B{idx+1}", "x": x_max, "y": y,
+                     "description": f"B{idx+1}: {r['household']} Premium affordability"},
                 ]
     else:
         if abs(r["b"]) > 1e-12:
-            xs = np.linspace(x_min, x_max, 120)
-            ys = (r["rhs"] - r["a"] * xs) / r["b"]
+            xs = np.linspace(x_min, x_max, 160)
+            ys = (float(r["rhs"]) - float(r["a"]) * xs) / float(r["b"])
             for x, y in zip(xs, ys):
                 if y_min <= y <= y_max:
-                    line_rows.append(
-                        {"line": f"I{idx+1} · {r['household']} · Indifference", "x": float(x), "y": float(y)}
-                    )
+                    line_rows.append({
+                        "line_id": f"I{idx+1}",
+                        "x": float(x),
+                        "y": float(y),
+                        "description": f"I{idx+1}: {r['household']} Regular/Premium indifference",
+                    })
 
 lines_df = pd.DataFrame(line_rows)
 
 obs_plot = df[["T", "p_regular", "p_premium"]].copy()
-obs_plot["Type"] = "Observed week"
-obs_plot["Label"] = obs_plot["T"].map(lambda x: f"Week {int(x)}")
+obs_plot["label"] = obs_plot["T"].map(lambda x: f"W{int(x)}")
 
-vertex_plot = pd.DataFrame()
-if not vertices.empty:
-    vertex_plot = vertices[["p_regular", "p_premium"]].copy()
-    vertex_plot["Type"] = "Model vertex"
-    vertex_plot["Label"] = [f"V{i+1}" for i in range(len(vertex_plot))]
+vertex_plot = positive_vertices[["p_regular", "p_premium"]].copy()
+vertex_plot["label"] = [f"V{i+1}" for i in range(len(vertex_plot))]
 
-st.subheader("2A. Bounding & indifference hyperplanes")
-st.markdown(
-    "**How to read it:** vertical lines are Regular affordability bounds; "
-    "horizontal lines are Premium affordability bounds; diagonal lines are "
-    "Regular-vs-Premium indifference boundaries. **A model vertex is where two "
-    "or more of these boundaries intersect.**"
-)
-st.dataframe(
-    hp[["kind", "household", "equation"]],
-    use_container_width=True,
-    hide_index=True,
-)
-
-# Compute scenarios before the main geometry chart so they can be shown on it.
+# Compute scenario outcomes before plotting so Scenario 3A and Section 2 use
+# exactly the same objects.
 scenario_names = {
     "C": "Mandatory Certification",
     "L": "Voluntary Labelling",
@@ -304,126 +329,159 @@ results = []
 for code, label in scenario_names.items():
     try:
         r = solve_scenario(code, consumers, tech, s=s)
-        results.append(
-            {
-                "Code": code,
-                "Scenario": label,
-                "p₀": r["p_regular"],
-                "p₁": r["p_premium"],
-                "Regular demand": r["demand_regular"],
-                "Premium demand": r["demand_premium"],
-                "Coverage": sum(v != "Exit" for v in r["choices"].values()),
-                "Industry profit Π": r["profit"],
-                "Welfare W": r["welfare"],
-                "Footprint Φ": r["footprint"],
-                "Stringency s": r["stringency"],
-            }
-        )
+        results.append({
+            "Code": code,
+            "Scenario": label,
+            "regular_price": float(r["p_regular"]),
+            "premium_price": float(r["p_premium"]),
+            "Regular demand": r["demand_regular"],
+            "Premium demand": r["demand_premium"],
+            "Coverage": sum(v != "Exit" for v in r["choices"].values()),
+            "Industry profit": r["profit"],
+            "Welfare": r["welfare"],
+            "Footprint": r["footprint"],
+            "Stringency": r["stringency"],
+        })
     except Exception as exc:
         results.append({"Code": code, "Scenario": label, "Error": str(exc)})
 
 scenario_df = pd.DataFrame(results)
-valid_scenarios = scenario_df[scenario_df.get("p₀", pd.Series(dtype=float)).notna()].copy() if "p₀" in scenario_df else pd.DataFrame()
+if "regular_price" in scenario_df.columns:
+    valid_scenarios = scenario_df[
+        scenario_df["regular_price"].notna() & scenario_df["premium_price"].notna()
+    ].copy()
+else:
+    valid_scenarios = pd.DataFrame()
 
-scenario_plot = pd.DataFrame()
 if not valid_scenarios.empty:
-    scenario_plot = valid_scenarios[["Code", "p₀", "p₁"]].copy()
-    scenario_plot["Type"] = "Scenario equilibrium"
-    scenario_plot["Label"] = scenario_plot["Code"]
+    scenario_plot = valid_scenarios[["Code", "regular_price", "premium_price"]].copy()
+    scenario_plot["label"] = scenario_plot["Code"]
+else:
+    scenario_plot = pd.DataFrame(columns=["Code", "regular_price", "premium_price", "label"])
 
-# Layered Altair chart: boundaries + vertices + observed weeks + scenario points.
-base = alt.Chart(pd.DataFrame({"x": [], "y": []})).properties(height=520)
+st.markdown("#### Price-space map")
+st.caption(
+    "Think of this as a map: **x = Regular price, y = Premium price**. "
+    "The observed weeks are market locations; ◆ vertices are model-generated "
+    "candidate boundaries; ★ marks are scenario outcomes."
+)
+
+# Layer 1: theoretical boundaries.
+chart_layers = []
 if not lines_df.empty:
-    line_chart = (
-        alt.Chart(lines_df)
-        .mark_line(opacity=0.35)
-        .encode(
+    chart_layers.append(
+        alt.Chart(lines_df).mark_line(opacity=0.38).encode(
             x=alt.X("x:Q", title="Regular price p₀", scale=alt.Scale(domain=[x_min, x_max])),
             y=alt.Y("y:Q", title="Premium price p₁", scale=alt.Scale(domain=[y_min, y_max])),
-            detail="line:N",
-            tooltip=["line:N", alt.Tooltip("x:Q", format=".2f"), alt.Tooltip("y:Q", format=".2f")],
-        )
-    )
-else:
-    line_chart = base
-
-layers = [line_chart]
-
-if not vertex_plot.empty:
-    layers.append(
-        alt.Chart(vertex_plot).mark_point(size=70, shape="diamond").encode(
-            x="p_regular:Q", y="p_premium:Q",
-            tooltip=[alt.Tooltip("Label:N"), alt.Tooltip("p_regular:Q", title="Regular"), alt.Tooltip("p_premium:Q", title="Premium")],
-        )
-    )
-    layers.append(
-        alt.Chart(vertex_plot).mark_text(dy=-10, fontSize=10).encode(
-            x="p_regular:Q", y="p_premium:Q", text="Label:N"
-        )
-    )
-
-layers.append(
-    alt.Chart(obs_plot).mark_point(size=70, filled=True).encode(
-        x="p_regular:Q", y="p_premium:Q",
-        tooltip=[
-            alt.Tooltip("Label:N"),
-            alt.Tooltip("p_regular:Q", title="Regular price"),
-            alt.Tooltip("p_premium:Q", title="Premium price"),
-        ],
-    )
-)
-layers.append(
-    alt.Chart(obs_plot).mark_text(dy=10, fontSize=9).encode(
-        x="p_regular:Q", y="p_premium:Q", text="Label:N"
-    )
-)
-
-if not scenario_plot.empty:
-    layers.append(
-        alt.Chart(scenario_plot).mark_point(size=170, shape="star").encode(
-            x="p₀:Q", y="p₁:Q",
+            detail="line_id:N",
             tooltip=[
-                alt.Tooltip("Code:N", title="Scenario"),
-                alt.Tooltip("p₀:Q", title="Regular equilibrium"),
-                alt.Tooltip("p₁:Q", title="Premium equilibrium"),
+                alt.Tooltip("description:N", title="Boundary"),
+                alt.Tooltip("x:Q", title="Regular", format=".2f"),
+                alt.Tooltip("y:Q", title="Premium", format=".2f"),
             ],
         )
     )
-    layers.append(
-        alt.Chart(scenario_plot).mark_text(dy=-13, fontSize=12, fontWeight="bold").encode(
-            x="p₀:Q", y="p₁:Q", text="Code:N"
+
+# Layer 2: vertices.
+if not vertex_plot.empty:
+    chart_layers.append(
+        alt.Chart(vertex_plot).mark_point(size=85, shape="diamond", filled=True).encode(
+            x=alt.X("p_regular:Q", title="Regular price p₀"),
+            y=alt.Y("p_premium:Q", title="Premium price p₁"),
+            tooltip=[
+                alt.Tooltip("label:N", title="Vertex"),
+                alt.Tooltip("p_regular:Q", title="Regular", format=".2f"),
+                alt.Tooltip("p_premium:Q", title="Premium", format=".2f"),
+            ],
+        )
+    )
+    chart_layers.append(
+        alt.Chart(vertex_plot).mark_text(dy=-11, fontSize=10).encode(
+            x="p_regular:Q", y="p_premium:Q", text="label:N"
         )
     )
 
-st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
+# Layer 3: observed weekly prices.
+chart_layers.append(
+    alt.Chart(obs_plot).mark_point(size=70, filled=True).encode(
+        x="p_regular:Q", y="p_premium:Q",
+        tooltip=[
+            alt.Tooltip("label:N", title="Observed week"),
+            alt.Tooltip("p_regular:Q", title="Regular price", format=".2f"),
+            alt.Tooltip("p_premium:Q", title="Premium price", format=".2f"),
+        ],
+    )
+)
+chart_layers.append(
+    alt.Chart(obs_plot).mark_text(dy=10, fontSize=9).encode(
+        x="p_regular:Q", y="p_premium:Q", text="label:N"
+    )
+)
+
+# Layer 4: scenario outcomes. If a scenario fails, the table below will expose
+# the actual error instead of silently producing an empty graph.
+if not scenario_plot.empty:
+    chart_layers.append(
+        alt.Chart(scenario_plot).mark_point(size=210, shape="star", filled=True).encode(
+            x="regular_price:Q", y="premium_price:Q",
+            tooltip=[
+                alt.Tooltip("Code:N", title="Scenario"),
+                alt.Tooltip("regular_price:Q", title="Regular equilibrium", format=".2f"),
+                alt.Tooltip("premium_price:Q", title="Premium equilibrium", format=".2f"),
+            ],
+        )
+    )
+    chart_layers.append(
+        alt.Chart(scenario_plot).mark_text(dy=-14, fontSize=12, fontWeight="bold").encode(
+            x="regular_price:Q", y="premium_price:Q", text="label:N"
+        )
+    )
+
+if chart_layers:
+    st.altair_chart(
+        alt.layer(*chart_layers).properties(height=560).interactive(),
+        use_container_width=True,
+    )
 
 st.caption(
-    "Legend: ♦ = model price vertex; ● = observed weekly price combination; "
-    "★ = scenario equilibrium. Hover over any line to see which household "
-    "boundary generated it, and hover over V1, V2, etc. to inspect the vertex."
+    "Legend: ◆ model vertex | ● observed weekly price | ★ scenario equilibrium. "
+    "Hover over a boundary to see its source household and meaning."
 )
+
+with st.expander("How do I interpret a vertex?", expanded=False):
+    st.markdown(
+        """
+1. Pick a **◆ V-number**.
+2. Read its **(Regular price, Premium price)** coordinates.
+3. Hover over the point to see the two boundaries that intersect there.
+4. Those boundaries are places where at least one household's predicted choice
+   can change.
+5. The paper's optimization then evaluates these candidate vertices rather than
+   searching every possible continuous price combination.
+
+**Important:** a vertex is a *candidate price point*, not automatically the
+optimal price and not necessarily an observed market price.
+"""
+    )
 
 st.subheader("2B. Empirical demand regions")
 st.info(
-    "**Important distinction:** these are **market regions**, not separate "
-    "regions for each household. One region represents **one combined pattern "
-    "of consumer decisions across all three households** at the observed prices. "
-    "Section 2B is empirically constructed from the panel: for every week, we "
-    "translate each household's observed Regular/Premium quantities into a "
-    "choice state (Regular, Premium, Both, or Exit), then group weeks that have "
-    "the same joint household-choice signature. These regions are therefore "
-    "descriptive empirical regions, not theoretical regions derived from the "
-    "paper's hyperplanes."
+    "**These are market regions, not household-specific regions.** One region "
+    "represents **one combined pattern of decisions across all three households**. "
+    "Section 2B is empirically constructed from the panel: each week is translated "
+    "into a household choice state (Regular, Premium, Both, or Exit), and weeks "
+    "with the same three-household signature are grouped together. These regions "
+    "describe what was observed in the coffee market; they are not the theoretical "
+    "hyperplane regions from the paper."
 )
 region_df = empirical_regions(df)
 st.dataframe(region_df, use_container_width=True, hide_index=True)
 
 st.subheader("2C. Week-by-week model validation")
 st.markdown(
-    "This section is now a direct consequence of the calibrated utility model "
-    "rather than a hand-written price threshold. For every observed week and "
-    "household, the app evaluates Regular utility, Premium utility and Exit, "
-    "then compares the model-implied choice with the observed choice."
+    "For every observed **week × household**, the calibrated utility model is "
+    "evaluated at the observed prices. The app then compares the model-implied "
+    "choice (Regular, Premium or Exit) with the observed purchase state."
 )
 validation_df = validate_panel(df, consumers, s=s)
 comparable = validation_df[validation_df["Comparable"] == "Yes"].copy()
@@ -433,9 +491,8 @@ v1.metric("Household-week observations", len(validation_df))
 v2.metric("Comparable to single-choice model", len(comparable))
 v3.metric("Model match rate", "N/A" if np.isnan(match_rate) else f"{100*match_rate:.1f}%")
 st.caption(
-    "Weeks where a household buys both products are shown explicitly as 'Both'. "
-    "They are not counted as a literal match because the paper's consumer problem "
-    "chooses one product type or Exit."
+    "A 'Both' observation is shown explicitly and excluded from literal accuracy "
+    "because the paper's consumer problem chooses one product type or Exit."
 )
 st.dataframe(validation_df.round(2), use_container_width=True, hide_index=True)
 
@@ -444,48 +501,51 @@ st.dataframe(validation_df.round(2), use_container_width=True, hide_index=True)
 # ---------------------------------------------------------------------------
 st.header("3. Equilibrium Analysis Across Policy Scenarios")
 st.markdown(
-    "Each scenario is a **point in the same (p₀, p₁) price space**. "
-    "The table and chart below therefore report both the Regular and Premium "
-    "equilibrium prices for every scenario."
+    "The four scenarios are **four points in the same two-dimensional price "
+    "space**. Each point has two coordinates: its Regular equilibrium price "
+    "p₀ and Premium equilibrium price p₁."
 )
+
 st.dataframe(scenario_df.round(2), use_container_width=True, hide_index=True)
 
-if not scenario_plot.empty:
+if not valid_scenarios.empty:
     st.subheader("3A. Scenario equilibria in price space")
-    st.markdown(
-        "The ★ markers are the four scenario outcomes: **C**, **L**, **CI**, "
-        "and **LI**. Their coordinates are the model's equilibrium Regular "
-        "and Premium prices under the current calibration."
+    st.info(
+        "**How to read this graph:** x-axis = Regular equilibrium price p₀; "
+        "y-axis = Premium equilibrium price p₁. Each ★ is one scenario. "
+        "For example, if ★ CI is at (45, 80), that means the CI scenario's "
+        "equilibrium is Regular = 45 and Premium = 80. The four points can be "
+        "compared directly with the observed weekly price points in Section 2."
     )
     st.altair_chart(
         alt.Chart(scenario_plot)
-        .mark_point(size=220, shape="star")
+        .mark_point(size=260, shape="star", filled=True)
         .encode(
-            x=alt.X("p₀:Q", title="Regular equilibrium price p₀"),
-            y=alt.Y("p₁:Q", title="Premium equilibrium price p₁"),
-            text="Code:N",
+            x=alt.X("regular_price:Q", title="Regular equilibrium price p₀"),
+            y=alt.Y("premium_price:Q", title="Premium equilibrium price p₁"),
             tooltip=[
-                "Code:N",
-                alt.Tooltip("p₀:Q", title="Regular"),
-                alt.Tooltip("p₁:Q", title="Premium"),
+                alt.Tooltip("Code:N", title="Scenario"),
+                alt.Tooltip("regular_price:Q", title="Regular equilibrium", format=".2f"),
+                alt.Tooltip("premium_price:Q", title="Premium equilibrium", format=".2f"),
             ],
         )
-        .properties(height=420)
+        .properties(height=450)
         .interactive(),
         use_container_width=True,
+    )
+else:
+    st.error(
+        "The scenario solver returned no valid equilibrium points. "
+        "See the Scenario table above for the exact error returned by each scenario."
     )
 
 st.subheader("3B. Scenario interpretation")
 st.markdown(
     """
-- **C — Mandatory Certification:** government selects the policy outcome
-  directly under mandatory certification.
-- **L — Voluntary Labelling:** producer/label responses are considered before
-  the government compares welfare.
-- **CI — Certification + Industry Pricing:** industry chooses the
-  profit-maximizing price vertex given the certification structure.
-- **LI — Voluntary Labelling + Industry Pricing:** industry pricing and
-  voluntary disclosure are evaluated before the welfare comparison.
+- **C — Mandatory Certification:** government selects the policy outcome directly under mandatory certification.
+- **L — Voluntary Labelling:** producer/label responses are considered before the government compares welfare.
+- **CI — Certification + Industry Pricing:** industry chooses the profit-maximizing price vertex given the certification structure.
+- **LI — Voluntary Labelling + Industry Pricing:** industry pricing and voluntary disclosure are evaluated before the welfare comparison.
 """
 )
 
@@ -494,18 +554,18 @@ st.markdown(
 # ---------------------------------------------------------------------------
 st.header("4. Empirical Comparison: Observed vs. Scenario Equilibria")
 observed = observed_market_outcome(df, consumers, tech, s=s)
-c = next((r for r in results if r.get("Code") == "C" and "p₀" in r), None)
-ci = next((r for r in results if r.get("Code") == "CI" and "p₀" in r), None)
+c = next((r for r in results if r.get("Code") == "C" and "regular_price" in r), None)
+ci = next((r for r in results if r.get("Code") == "CI" and "regular_price" in r), None)
 
 summary = df[["T", "p_regular", "p_premium"]].rename(
     columns={"T": "Week", "p_regular": "Observed p₀", "p_premium": "Observed p₁"}
 ).copy()
 
 if c and ci:
-    summary["C p₀"] = c["p₀"]
-    summary["C p₁"] = c["p₁"]
-    summary["CI p₀"] = ci["p₀"]
-    summary["CI p₁"] = ci["p₁"]
+    summary["C p₀"] = c["regular_price"]
+    summary["C p₁"] = c["premium_price"]
+    summary["CI p₀"] = ci["regular_price"]
+    summary["CI p₁"] = ci["premium_price"]
     summary["Distance → C"] = np.hypot(
         summary["Observed p₀"] - c["p₀"], summary["Observed p₁"] - c["p₁"]
     )
@@ -517,8 +577,8 @@ if c and ci:
     comparison = pd.DataFrame(
         [
             ["Observed historical", df.p_regular.mean(), df.p_premium.mean(), observed.profit.mean(), observed.welfare.mean()],
-            ["Scenario C", c["p₀"], c["p₁"], c["Industry profit Π"], c["Welfare W"]],
-            ["Scenario CI", ci["p₀"], ci["p₁"], ci["Industry profit Π"], ci["Welfare W"]],
+            ["Scenario C", c["p₀"], c["p₁"], c["Industry profit"], c["Welfare"]],
+            ["Scenario CI", ci["p₀"], ci["p₁"], ci["Industry profit"], ci["Welfare"]],
         ],
         columns=["Outcome", "Regular price", "Premium price", "Industry profit", "Social welfare"],
     )
@@ -545,15 +605,15 @@ if not valid_scenarios.empty:
     mean_p0 = float(df.p_regular.mean())
     mean_p1 = float(df.p_premium.mean())
     for _, r in valid_scenarios.iterrows():
-        dist = float(np.hypot(r["p₀"] - mean_p0, r["p₁"] - mean_p1))
+        dist = float(np.hypot(r["regular_price"] - mean_p0, r["premium_price"] - mean_p1))
         realism_rows.append(
             {
                 "Scenario": r["Code"],
                 "Equilibrium Regular p₀": r["p₀"],
                 "Equilibrium Premium p₁": r["p₁"],
                 "Distance from observed mean": dist,
-                "Industry profit Π": r["Industry profit Π"],
-                "Social welfare W": r["Welfare W"],
+                "Industry profit Π": r["Industry profit"],
+                "Social welfare W": r["Welfare"],
             }
         )
     realism = pd.DataFrame(realism_rows).sort_values("Distance from observed mean")
