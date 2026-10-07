@@ -567,18 +567,18 @@ if c and ci:
     summary["CI p₀"] = ci["regular_price"]
     summary["CI p₁"] = ci["premium_price"]
     summary["Distance → C"] = np.hypot(
-        summary["Observed p₀"] - c["p₀"], summary["Observed p₁"] - c["p₁"]
+        summary["Observed p₀"] - c["regular_price"], summary["Observed p₁"] - c["premium_price"]
     )
     summary["Distance → CI"] = np.hypot(
-        summary["Observed p₀"] - ci["p₀"], summary["Observed p₁"] - ci["p₁"]
+        summary["Observed p₀"] - ci["regular_price"], summary["Observed p₁"] - ci["premium_price"]
     )
     st.dataframe(summary.round(2), use_container_width=True, hide_index=True)
 
     comparison = pd.DataFrame(
         [
             ["Observed historical", df.p_regular.mean(), df.p_premium.mean(), observed.profit.mean(), observed.welfare.mean()],
-            ["Scenario C", c["p₀"], c["p₁"], c["Industry profit"], c["Welfare"]],
-            ["Scenario CI", ci["p₀"], ci["p₁"], ci["Industry profit"], ci["Welfare"]],
+            ["Scenario C", c["regular_price"], c["premium_price"], c["Industry profit"], c["Welfare"]],
+            ["Scenario CI", ci["regular_price"], ci["premium_price"], ci["Industry profit"], ci["Welfare"]],
         ],
         columns=["Outcome", "Regular price", "Premium price", "Industry profit", "Social welfare"],
     )
@@ -609,8 +609,8 @@ if not valid_scenarios.empty:
         realism_rows.append(
             {
                 "Scenario": r["Code"],
-                "Equilibrium Regular p₀": r["p₀"],
-                "Equilibrium Premium p₁": r["p₁"],
+                "Equilibrium Regular p₀": r["regular_price"],
+                "Equilibrium Premium p₁": r["premium_price"],
                 "Distance from observed mean": dist,
                 "Industry profit Π": r["Industry profit"],
                 "Social welfare W": r["Welfare"],
@@ -626,12 +626,12 @@ if not valid_scenarios.empty:
     )
 
     st.subheader("Profitability")
-    best_profit = valid_scenarios.loc[valid_scenarios["Industry profit Π"].idxmax()]
+    best_profit = valid_scenarios.loc[valid_scenarios["Industry profit"].idxmax()]
     st.markdown("**Which produces the highest Π?**")
     st.metric("Highest industry profit", f"{best_profit['Code']} — Π = {best_profit['Industry profit Π']:.2f}")
 
     st.subheader("Social welfare")
-    best_welfare = valid_scenarios.loc[valid_scenarios["Welfare W"].idxmax()]
+    best_welfare = valid_scenarios.loc[valid_scenarios["Welfare"].idxmax()]
     st.markdown("**Which produces the highest W?**")
     st.metric("Highest social welfare", f"{best_welfare['Code']} — W = {best_welfare['Welfare W']:.2f}")
 
