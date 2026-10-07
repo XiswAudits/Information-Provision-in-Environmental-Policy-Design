@@ -191,22 +191,93 @@ def validate_panel(df, consumers, s=2.0):
 
     return pd.DataFrame(rows)
 
-def solve_scenario(scenario,consumers,tech,s=2.0):
-    v=price_vertices(consumers,s); v=v[(v.p_regular>0)&(v.p_premium>0)]
-    if v.empty: raise ValueError("No finite price vertices were generated.")
-    labels=[(0,1)] if scenario in {"C","CI"} else [(0,1),(0,0)]
-    def outcomes(lab): return [market_outcome(r.p_regular,r.p_premium,consumers,s,tech,lab) for r in v.itertuples(index=False)]
-    if scenario=="C": best=max(outcomes((0,1)),key=lambda x:(x["welfare"],x["profit"]))
-    elif scenario=="L":
-        candidates=[]
-        for r in v.itertuples(index=False):
-            opts=[market_outcome(r.p_regular,r.p_premium,consumers,s,tech,l) for l in labels]
-            candidates.append(max(opts,key=lambda x:(x["profit"],x["welfare"])))
-        best=max(candidates,key=lambda x:(x["welfare"],x["profit"]))
-    elif scenario=="CI": best=max(outcomes((0,1)),key=lambda x:(x["profit"],x["welfare"]))
-    elif scenario=="LI": best=max([max(outcomes(l),key=lambda x:(x["profit"],x["welfare"])) for l in labels],key=lambda x:(x["welfare"],x["profit"]))
-    else: raise ValueError(f"Unknown scenario: {scenario}")
-    best=dict(best); best.update(scenario=scenario,stringency=s,delimiter=min(tech.phi0,tech.phi1)); return best
+def solve_scenario(scenario, consumers, tech, s=2.0):
+    """
+    Solve the empirical two-technology adaptation of the four D&G scenarios.
+
+    The paper derives stringency from the government's delimiter composition.
+    With two represented technologies (M=2) and one information tier (K=1),
+    the feasible stringency values are 1, 1.5 and 2.0. We enumerate those
+    policy designs instead of forcing all scenarios to use one fixed s.
+
+    This is an empirical adaptation: the coffee panel does not contain a full
+    technology inventory, so M=2 is an explicit modelling assumption.
+    """
+    if scenario not in {"C", "L", "CI", "LI"}:
+        raise ValueError(f"Unknown scenario: {scenario}")
+
+    candidate_s = [1.0, 1.5, 2.0]
+
+    def outcomes_for(s_value, lab):
+        vertices = price_vertices(consumers, s_value)
+        vertices = vertices[
+            (vertices.p_regular > 0) & (vertices.p_premium > 0)
+        ]
+        return [
+            market_outcome(r.p_regular, r.p_premium, consumers, s_value, tech, lab)
+            for r in vertices.itertuples(index=False)
+        ]
+
+    policy_solutions = []
+
+    for s_value in candidate_s:
+        certified = outcomes_for(s_value, (0, 1))
+        if not certified:
+            continue
+
+        if scenario == "C":
+            best = max(certified, key=lambda x: (x["welfare"], x["profit"]))
+
+        elif scenario == "CI":
+            # Industry chooses the price vertex that maximises profit;
+            # government then compares the resulting welfare across policies.
+            best = max(certified, key=lambda x: (x["profit"], x["welfare"]))
+
+        elif scenario == "L":
+            # Producers may retain their matching label or choose the lower
+            # (non-labelled) type. Their label choice is profit-maximising.
+            candidates = []
+            for outcome in certified:
+                p0, p1 = outcome["p_regular"], outcome["p_premium"]
+                options = [
+                    market_outcome(p0, p1, consumers, s_value, tech, (0, 1)),
+                    market_outcome(p0, p1, consumers, s_value, tech, (0, 0)),
+                ]
+                candidates.append(max(options, key=lambda x: (x["profit"], x["welfare"])))
+            best = max(candidates, key=lambda x: (x["welfare"], x["profit"]))
+
+        else:  # LI
+            # Industry chooses the profit-maximising price/label response for
+            # each policy design; government then selects the welfare-maximising
+            # policy design.
+            candidates = []
+            for lab in ((0, 1), (0, 0)):
+                options = outcomes_for(s_value, lab)
+                if options:
+                    candidates.append(max(options, key=lambda x: (x["profit"], x["welfare"])))
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda x: (x["profit"], x["welfare"]))
+
+        best = dict(best)
+        best.update(
+            scenario=scenario,
+            stringency=s_value,
+            delimiter=(
+                tech.phi0 if s_value <= 1.0
+                else (tech.phi0 + tech.phi1) / 2.0 if s_value < 2.0
+                else tech.phi1
+            ),
+            policy_search="Enumerated feasible two-technology stringencies: 1.0, 1.5, 2.0",
+        )
+        policy_solutions.append(best)
+
+    if not policy_solutions:
+        raise ValueError("No feasible equilibrium was generated for this scenario.")
+
+    # Government is the top-level player in all four scenarios and therefore
+    # selects the policy design with the highest resulting social welfare.
+    return max(policy_solutions, key=lambda x: (x["welfare"], x["profit"]))
 
 def observed_market_outcome(df,consumers,tech,s=2.0):
     rows=[]
