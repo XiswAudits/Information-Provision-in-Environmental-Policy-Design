@@ -517,22 +517,50 @@ if not valid_scenarios.empty:
         "equilibrium is Regular = 45 and Premium = 80. The four points can be "
         "compared directly with the observed weekly price points in Section 2."
     )
-    st.altair_chart(
-        alt.Chart(scenario_plot)
-        .mark_point(size=260, shape="star", filled=True)
-        .encode(
-            x=alt.X("regular_price:Q", title="Regular equilibrium price p₀"),
-            y=alt.Y("premium_price:Q", title="Premium equilibrium price p₁"),
+    # Explicit numeric coercion prevents Altair from silently dropping points
+    # when values arrive from pandas as object/string types.
+    scenario_plot = scenario_plot.copy()
+    scenario_plot["regular_price"] = pd.to_numeric(scenario_plot["regular_price"], errors="coerce")
+    scenario_plot["premium_price"] = pd.to_numeric(scenario_plot["premium_price"], errors="coerce")
+    scenario_plot = scenario_plot.dropna(subset=["regular_price", "premium_price"])
+
+    if not scenario_plot.empty:
+        xlo = min(float(df.p_regular.min()), float(scenario_plot["regular_price"].min())) * 0.95
+        xhi = max(float(df.p_regular.max()), float(scenario_plot["regular_price"].max())) * 1.05
+        ylo = min(float(df.p_premium.min()), float(scenario_plot["premium_price"].min())) * 0.95
+        yhi = max(float(df.p_premium.max()), float(scenario_plot["premium_price"].max())) * 1.05
+
+        points = alt.Chart(scenario_plot).mark_point(
+            size=260, shape="star", filled=True
+        ).encode(
+            x=alt.X("regular_price:Q", title="Regular equilibrium price p₀",
+                    scale=alt.Scale(domain=[xlo, xhi])),
+            y=alt.Y("premium_price:Q", title="Premium equilibrium price p₁",
+                    scale=alt.Scale(domain=[ylo, yhi])),
             tooltip=[
                 alt.Tooltip("Code:N", title="Scenario"),
                 alt.Tooltip("regular_price:Q", title="Regular equilibrium", format=".2f"),
                 alt.Tooltip("premium_price:Q", title="Premium equilibrium", format=".2f"),
             ],
         )
-        .properties(height=450)
-        .interactive(),
-        use_container_width=True,
-    )
+
+        labels = alt.Chart(scenario_plot).mark_text(
+            dy=-16, fontSize=13, fontWeight="bold"
+        ).encode(
+            x="regular_price:Q",
+            y="premium_price:Q",
+            text="label:N",
+        )
+
+        st.altair_chart(
+            (points + labels).properties(height=450).interactive(),
+            use_container_width=True,
+        )
+    else:
+        st.warning(
+            "The scenario solver returned rows, but none contains a valid numeric "
+            "Regular/Premium equilibrium price. Check the Scenario table above."
+        )
 else:
     st.error(
         "The scenario solver returned no valid equilibrium points. "
@@ -628,12 +656,12 @@ if not valid_scenarios.empty:
     st.subheader("Profitability")
     best_profit = valid_scenarios.loc[valid_scenarios["Industry profit"].idxmax()]
     st.markdown("**Which produces the highest Π?**")
-    st.metric("Highest industry profit", f"{best_profit['Code']} — Π = {best_profit['Industry profit Π']:.2f}")
+    st.metric("Highest industry profit", f"{best_profit['Code']} — Π = {best_profit['Industry profit']:.2f}")
 
     st.subheader("Social welfare")
     best_welfare = valid_scenarios.loc[valid_scenarios["Welfare"].idxmax()]
     st.markdown("**Which produces the highest W?**")
-    st.metric("Highest social welfare", f"{best_welfare['Code']} — W = {best_welfare['Welfare W']:.2f}")
+    st.metric("Highest social welfare", f"{best_welfare['Code']} — W = {best_welfare['Welfare']:.2f}")
 
     st.info(
         "These three rankings are deliberately kept separate: a scenario can be "
