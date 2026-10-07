@@ -158,6 +158,9 @@ tech = TechParams(
     gamma=gamma,
 )
 consumers = estimate_consumers(df, s=s)
+# Scenario optimization must use the stringency-specific μ estimates because
+# μ^s is defined as policy-dependent in Danilina & Grigoriev.
+scenario_consumers = {sv: estimate_consumers(df, s=sv) for sv in (1.0, 1.5, 2.0)}
 
 m = st.columns(4)
 m[0].metric("Weeks", len(df))
@@ -328,7 +331,7 @@ scenario_names = {
 results = []
 for code, label in scenario_names.items():
     try:
-        r = solve_scenario(code, consumers, tech, s=s)
+        r = solve_scenario(code, consumers, tech, s=s, consumers_by_s=scenario_consumers)
         results.append({
             "Code": code,
             "Scenario": label,
