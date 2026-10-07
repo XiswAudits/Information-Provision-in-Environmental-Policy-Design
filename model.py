@@ -191,7 +191,7 @@ def validate_panel(df, consumers, s=2.0):
 
     return pd.DataFrame(rows)
 
-def solve_scenario(scenario, consumers, tech, s=2.0):
+def solve_scenario(scenario, consumers, tech, s=2.0, consumers_by_s=None):
     """
     Solve the empirical two-technology adaptation of the four D&G scenarios.
 
@@ -209,12 +209,17 @@ def solve_scenario(scenario, consumers, tech, s=2.0):
     candidate_s = [1.0, 1.5, 2.0]
 
     def outcomes_for(s_value, lab):
-        vertices = price_vertices(consumers, s_value)
+        # μ is explicitly stringency-specific in the paper. Therefore the
+        # consumer calibration used to construct the price space must change
+        # with the candidate policy stringency; reusing the s=2 calibration
+        # would artificially make different policy designs look identical.
+        active_consumers = (consumers_by_s or {}).get(s_value, consumers)
+        vertices = price_vertices(active_consumers, s_value)
         vertices = vertices[
             (vertices.p_regular > 0) & (vertices.p_premium > 0)
         ]
         return [
-            market_outcome(r.p_regular, r.p_premium, consumers, s_value, tech, lab)
+            market_outcome(r.p_regular, r.p_premium, active_consumers, s_value, tech, lab)
             for r in vertices.itertuples(index=False)
         ]
 
