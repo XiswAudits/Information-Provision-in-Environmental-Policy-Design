@@ -364,69 +364,120 @@ else:
 
 st.markdown("#### Price-space map")
 st.caption(
-    "Think of this as a map: **x = Regular price, y = Premium price**. "
-    "The observed weeks are market locations; ◆ vertices are model-generated "
-    "candidate boundaries; ★ marks are scenario outcomes."
+    "This is the actual 2D price plane from the paper: **x = Regular price p₀**, "
+    "**y = Premium price p₁**. Lines are choice/affordability boundaries; ◆ are "
+    "their intersections; ● are observed weekly prices; ★ are scenario equilibria."
 )
 
-# Layer 1: theoretical boundaries.
-chart_layers = []
-if not lines_df.empty:
-    chart_layers.append(
-        alt.Chart(lines_df).mark_line(opacity=0.38).encode(
-            x=alt.X("x:Q", title="Regular price p₀", scale=alt.Scale(domain=[x_min, x_max])),
-            y=alt.Y("y:Q", title="Premium price p₁", scale=alt.Scale(domain=[y_min, y_max])),
-            detail="line_id:N",
-            tooltip=[
-                alt.Tooltip("description:N", title="Boundary"),
-                alt.Tooltip("x:Q", title="Regular", format=".2f"),
-                alt.Tooltip("y:Q", title="Premium", format=".2f"),
-            ],
-        )
-    )
+# Make every plotting field explicitly numeric. This avoids Altair treating a
+# boundary coordinate as categorical/object data and rendering only point layers.
+lines_plot = lines_df.copy()
+if not lines_plot.empty:
+    lines_plot["x"] = pd.to_numeric(lines_plot["x"], errors="coerce")
+    lines_plot["y"] = pd.to_numeric(lines_plot["y"], errors="coerce")
+    lines_plot = lines_plot.dropna(subset=["x", "y"])
 
-# Layer 2: vertices.
-if not vertex_plot.empty:
-    chart_layers.append(
-        alt.Chart(vertex_plot).mark_point(size=85, shape="diamond", filled=True).encode(
-            x=alt.X("p_regular:Q", title="Regular price p₀"),
-            y=alt.Y("p_premium:Q", title="Premium price p₁"),
-            tooltip=[
-                alt.Tooltip("label:N", title="Vertex"),
-                alt.Tooltip("p_regular:Q", title="Regular", format=".2f"),
-                alt.Tooltip("p_premium:Q", title="Premium", format=".2f"),
-            ],
-        )
-    )
-    chart_layers.append(
-        alt.Chart(vertex_plot).mark_text(dy=-11, fontSize=10).encode(
-            x="p_regular:Q", y="p_premium:Q", text="label:N"
-        )
-    )
+obs_plot = obs_plot.copy()
+obs_plot["p_regular"] = pd.to_numeric(obs_plot["p_regular"], errors="coerce")
+obs_plot["p_premium"] = pd.to_numeric(obs_plot["p_premium"], errors="coerce")
 
-# Layer 3: observed weekly prices.
-chart_layers.append(
-    alt.Chart(obs_plot).mark_point(size=70, filled=True).encode(
-        x="p_regular:Q", y="p_premium:Q",
+vertex_plot = vertex_plot.copy()
+vertex_plot["p_regular"] = pd.to_numeric(vertex_plot["p_regular"], errors="coerce")
+vertex_plot["p_premium"] = pd.to_numeric(vertex_plot["p_premium"], errors="coerce")
+vertex_plot = vertex_plot.dropna(subset=["p_regular", "p_premium"])
+
+# Include boundary coordinates in the plotting window, not just vertices.
+all_x = list(obs_plot["p_regular"].dropna()) + list(vertex_plot["p_regular"].dropna())
+all_y = list(obs_plot["p_premium"].dropna()) + list(vertex_plot["p_premium"].dropna())
+if not lines_plot.empty:
+    all_x += list(lines_plot["x"])
+    all_y += list(lines_plot["y"])
+
+xmin = max(0.0, min(all_x) - 2.0) if all_x else 0.0
+xmax = max(all_x) + 2.0 if all_x else 100.0
+ymin = max(0.0, min(all_y) - 2.0) if all_y else 0.0
+ymax = max(all_y) + 2.0 if all_y else 100.0
+
+# Common scales are defined once so the lines and points necessarily occupy
+# the same coordinate system.
+x_enc = alt.X(
+    "x:Q", title="Regular price p₀",
+    scale=alt.Scale(domain=[xmin, xmax], zero=False)
+)
+y_enc = alt.Y(
+    "y:Q", title="Premium price p₁",
+    scale=alt.Scale(domain=[ymin, ymax], zero=False)
+)
+
+layers = []
+
+if not lines_plot.empty:
+    # Boundary lines are deliberately strong/opaque so they cannot disappear
+    # underneath the observed/model points.
+    boundary_lines = alt.Chart(lines_plot).mark_line(
+        strokeWidth=2.5, opacity=0.85
+    ).encode(
+        x=x_enc,
+        y=y_enc,
+        detail=alt.Detail("line_id:N"),
+        order=alt.Order("x:Q"),
         tooltip=[
-            alt.Tooltip("label:N", title="Observed week"),
-            alt.Tooltip("p_regular:Q", title="Regular price", format=".2f"),
-            alt.Tooltip("p_premium:Q", title="Premium price", format=".2f"),
+            alt.Tooltip("description:N", title="Boundary"),
+            alt.Tooltip("x:Q", title="Regular", format=".2f"),
+            alt.Tooltip("y:Q", title="Premium", format=".2f"),
         ],
     )
-)
-chart_layers.append(
-    alt.Chart(obs_plot).mark_text(dy=10, fontSize=9).encode(
-        x="p_regular:Q", y="p_premium:Q", text="label:N"
-    )
-)
+    layers.append(boundary_lines)
 
-# Layer 4: scenario outcomes. If a scenario fails, the table below will expose
-# the actual error instead of silently producing an empty graph.
+if not vertex_plot.empty:
+    vertices_layer = alt.Chart(vertex_plot).mark_point(
+        size=120, shape="diamond", filled=True
+    ).encode(
+        x=alt.X("p_regular:Q", title="Regular price p₀",
+                scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+        y=alt.Y("p_premium:Q", title="Premium price p₁",
+                scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+        tooltip=[
+            alt.Tooltip("label:N", title="Vertex"),
+            alt.Tooltip("p_regular:Q", title="Regular", format=".2f"),
+            alt.Tooltip("p_premium:Q", title="Premium", format=".2f"),
+        ],
+    )
+    layers.append(vertices_layer)
+    layers.append(
+        alt.Chart(vertex_plot).mark_text(
+            dy=-12, fontSize=10, fontWeight="bold"
+        ).encode(
+            x=alt.X("p_regular:Q", scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("p_premium:Q", scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            text="label:N",
+        )
+    )
+
+if not obs_plot.empty:
+    layers.append(
+        alt.Chart(obs_plot).mark_point(size=75, filled=True).encode(
+            x=alt.X("p_regular:Q", title="Regular price p₀",
+                    scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("p_premium:Q", title="Premium price p₁",
+                    scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            tooltip=[
+                alt.Tooltip("label:N", title="Observed week"),
+                alt.Tooltip("p_regular:Q", title="Regular price", format=".2f"),
+                alt.Tooltip("p_premium:Q", title="Premium price", format=".2f"),
+            ],
+        )
+    )
+
 if not scenario_plot.empty:
-    chart_layers.append(
-        alt.Chart(scenario_plot).mark_point(size=210, shape="star", filled=True).encode(
-            x="regular_price:Q", y="premium_price:Q",
+    layers.append(
+        alt.Chart(scenario_plot).mark_point(
+            size=220, shape="star", filled=True
+        ).encode(
+            x=alt.X("regular_price:Q", title="Regular price p₀",
+                    scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("premium_price:Q", title="Premium price p₁",
+                    scale=alt.Scale(domain=[ymin, ymax], zero=False)),
             tooltip=[
                 alt.Tooltip("Code:N", title="Scenario"),
                 alt.Tooltip("regular_price:Q", title="Regular equilibrium", format=".2f"),
@@ -434,16 +485,45 @@ if not scenario_plot.empty:
             ],
         )
     )
-    chart_layers.append(
-        alt.Chart(scenario_plot).mark_text(dy=-14, fontSize=12, fontWeight="bold").encode(
-            x="regular_price:Q", y="premium_price:Q", text="label:N"
+    layers.append(
+        alt.Chart(scenario_plot).mark_text(
+            dy=-14, fontSize=12, fontWeight="bold"
+        ).encode(
+            x=alt.X("regular_price:Q", scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("premium_price:Q", scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            text="label:N",
         )
     )
 
-if chart_layers:
+if layers:
     st.altair_chart(
-        alt.layer(*chart_layers).properties(height=560).interactive(),
+        alt.layer(*layers).resolve_scale(x="shared", y="shared")
+        .properties(height=560)
+        .interactive(),
         use_container_width=True,
+    )
+else:
+    st.error("No price-space geometry was generated.")
+
+st.caption(
+    f"Geometry shown: {lines_plot['line_id'].nunique() if not lines_plot.empty else 0} "
+    f"boundaries · {len(vertex_plot)} vertices · {len(obs_plot)} observed weeks. "
+    "Legend: ◆ model vertex | ● observed weekly price | ★ scenario equilibrium."
+)
+
+with st.expander("How do I interpret a vertex?", expanded=False):
+    st.markdown(
+        """
+1. Pick a **◆ V-number**.
+2. Read its **(Regular price, Premium price)** coordinates.
+3. Hover over the point to see the boundaries that intersect there.
+4. Those boundaries are places where a household's predicted choice can change.
+5. The paper's optimization evaluates these candidate vertices rather than
+   searching every possible continuous price combination.
+
+**Important:** a vertex is a *candidate price point*, not automatically the
+optimal price and not necessarily an observed market price.
+"""
     )
 
 st.caption(
