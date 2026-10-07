@@ -364,89 +364,170 @@ else:
 
 st.markdown("#### Price-space map")
 st.caption(
-    "This is the actual 2D price plane from the paper: **x = Regular price p₀**, "
-    "**y = Premium price p₁**. Lines are choice/affordability boundaries; ◆ are "
-    "their intersections; ● are observed weekly prices; ★ are scenario equilibria."
+    "The lines below are the **actual model boundaries** in the (p₀, p₁) plane. "
+    "Vertical = Regular affordability; horizontal = Premium affordability; "
+    "diagonal = Regular/Premium indifference. ◆ = model vertex; ● = observed price; "
+    "★ = scenario equilibrium."
 )
 
-# Make every plotting field explicitly numeric. This avoids Altair treating a
-# boundary coordinate as categorical/object data and rendering only point layers.
-lines_plot = lines_df.copy()
-if not lines_plot.empty:
-    lines_plot["x"] = pd.to_numeric(lines_plot["x"], errors="coerce")
-    lines_plot["y"] = pd.to_numeric(lines_plot["y"], errors="coerce")
-    lines_plot = lines_plot.dropna(subset=["x", "y"])
+# Build explicit geometric objects. Using mark_rule for vertical/horizontal
+# boundaries avoids Vega/Altair line-ordering ambiguities when x or y is constant.
+vertical_rows, horizontal_rows, indifference_rows = [], [], []
 
-obs_plot = obs_plot.copy()
+for idx, r in hp.iterrows():
+    hid = f"B{idx+1}"
+    desc = str(r.get("household", ""))
+
+    if r["kind"] == "Bounding":
+        if abs(float(r["a"])) > 1e-12:
+            x = float(r["rhs"] / r["a"])
+            if x_min <= x <= x_max:
+                vertical_rows.append({
+                    "line_id": hid, "x": x, "description": f"{hid}: {desc} Regular affordability"
+                })
+        elif abs(float(r["b"])) > 1e-12:
+            y = float(r["rhs"] / r["b"])
+            if y_min <= y <= y_max:
+                horizontal_rows.append({
+                    "line_id": hid, "y": y, "description": f"{hid}: {desc} Premium affordability"
+                })
+    else:
+        b = float(r["b"])
+        if abs(b) > 1e-12:
+            xs = np.linspace(x_min, x_max, 300)
+            ys = (float(r["rhs"]) - float(r["a"]) * xs) / b
+            mask = (ys >= y_min) & (ys <= y_max)
+            for xval, yval in zip(xs[mask], ys[mask]):
+                indifference_rows.append({
+                    "line_id": hid,
+                    "x": float(xval),
+                    "y": float(yval),
+                    "description": f"I{idx+1}: {desc} Regular/Premium indifference",
+                })
+
+vertical_df = pd.DataFrame(vertical_rows)
+horizontal_df = pd.DataFrame(horizontal_rows)
+indifference_df = pd.DataFrame(indifference_rows)
+
+# Observed prices
+obs_plot = df[["T", "p_regular", "p_premium"]].copy()
 obs_plot["p_regular"] = pd.to_numeric(obs_plot["p_regular"], errors="coerce")
 obs_plot["p_premium"] = pd.to_numeric(obs_plot["p_premium"], errors="coerce")
+obs_plot["label"] = obs_plot["T"].map(lambda x: f"W{int(x)}")
 
-vertex_plot = vertex_plot.copy()
+# Model vertices
+vertex_plot = positive_vertices[["p_regular", "p_premium", "hyperplane_1", "hyperplane_2"]].copy()
 vertex_plot["p_regular"] = pd.to_numeric(vertex_plot["p_regular"], errors="coerce")
 vertex_plot["p_premium"] = pd.to_numeric(vertex_plot["p_premium"], errors="coerce")
-vertex_plot = vertex_plot.dropna(subset=["p_regular", "p_premium"])
+vertex_plot = vertex_plot.dropna(subset=["p_regular", "p_premium"]).reset_index(drop=True)
+vertex_plot["label"] = [f"V{i+1}" for i in range(len(vertex_plot))]
 
-# Include boundary coordinates in the plotting window, not just vertices.
+# Scenario points
+scenario_plot = scenario_plot.copy()
+scenario_plot["regular_price"] = pd.to_numeric(scenario_plot["regular_price"], errors="coerce")
+scenario_plot["premium_price"] = pd.to_numeric(scenario_plot["premium_price"], errors="coerce")
+scenario_plot = scenario_plot.dropna(subset=["regular_price", "premium_price"])
+
+# Keep the whole relevant price plane visible.
 all_x = list(obs_plot["p_regular"].dropna()) + list(vertex_plot["p_regular"].dropna())
 all_y = list(obs_plot["p_premium"].dropna()) + list(vertex_plot["p_premium"].dropna())
-if not lines_plot.empty:
-    all_x += list(lines_plot["x"])
-    all_y += list(lines_plot["y"])
+if not vertical_df.empty:
+    all_x += list(vertical_df["x"])
+if not horizontal_df.empty:
+    all_y += list(horizontal_df["y"])
+if not indifference_df.empty:
+    all_x += list(indifference_df["x"])
+    all_y += list(indifference_df["y"])
+if not scenario_plot.empty:
+    all_x += list(scenario_plot["regular_price"])
+    all_y += list(scenario_plot["premium_price"])
 
-xmin = max(0.0, min(all_x) - 2.0) if all_x else 0.0
-xmax = max(all_x) + 2.0 if all_x else 100.0
-ymin = max(0.0, min(all_y) - 2.0) if all_y else 0.0
-ymax = max(all_y) + 2.0 if all_y else 100.0
-
-# Common scales are defined once so the lines and points necessarily occupy
-# the same coordinate system.
-x_enc = alt.X(
-    "x:Q", title="Regular price p₀",
-    scale=alt.Scale(domain=[xmin, xmax], zero=False)
-)
-y_enc = alt.Y(
-    "y:Q", title="Premium price p₁",
-    scale=alt.Scale(domain=[ymin, ymax], zero=False)
-)
+xmin = max(0.0, min(all_x) - 3.0) if all_x else 0.0
+xmax = max(all_x) + 3.0 if all_x else 100.0
+ymin = max(0.0, min(all_y) - 3.0) if all_y else 0.0
+ymax = max(all_y) + 3.0 if all_y else 100.0
 
 layers = []
 
-if not lines_plot.empty:
-    # Boundary lines are deliberately strong/opaque so they cannot disappear
-    # underneath the observed/model points.
-    boundary_lines = alt.Chart(lines_plot).mark_line(
-        strokeWidth=2.5, opacity=0.85
-    ).encode(
-        x=x_enc,
-        y=y_enc,
-        detail=alt.Detail("line_id:N"),
-        order=alt.Order("x:Q"),
-        tooltip=[
-            alt.Tooltip("description:N", title="Boundary"),
-            alt.Tooltip("x:Q", title="Regular", format=".2f"),
-            alt.Tooltip("y:Q", title="Premium", format=".2f"),
-        ],
+# VERTICAL AFFORDABILITY BOUNDARIES
+if not vertical_df.empty:
+    layers.append(
+        alt.Chart(vertical_df).mark_rule(
+            strokeWidth=3,
+            opacity=0.95,
+        ).encode(
+            x=alt.X("x:Q", title="Regular price p₀",
+                    scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            color=alt.Color("line_id:N", legend=None),
+            tooltip=[
+                alt.Tooltip("line_id:N", title="Boundary"),
+                alt.Tooltip("description:N", title="Meaning"),
+                alt.Tooltip("x:Q", title="Regular boundary", format=".2f"),
+            ],
+        )
     )
-    layers.append(boundary_lines)
 
-if not vertex_plot.empty:
-    vertices_layer = alt.Chart(vertex_plot).mark_point(
-        size=120, shape="diamond", filled=True
-    ).encode(
-        x=alt.X("p_regular:Q", title="Regular price p₀",
-                scale=alt.Scale(domain=[xmin, xmax], zero=False)),
-        y=alt.Y("p_premium:Q", title="Premium price p₁",
-                scale=alt.Scale(domain=[ymin, ymax], zero=False)),
-        tooltip=[
-            alt.Tooltip("label:N", title="Vertex"),
-            alt.Tooltip("p_regular:Q", title="Regular", format=".2f"),
-            alt.Tooltip("p_premium:Q", title="Premium", format=".2f"),
-        ],
+# HORIZONTAL AFFORDABILITY BOUNDARIES
+if not horizontal_df.empty:
+    layers.append(
+        alt.Chart(horizontal_df).mark_rule(
+            strokeWidth=3,
+            opacity=0.95,
+        ).encode(
+            y=alt.Y("y:Q", title="Premium price p₁",
+                    scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            color=alt.Color("line_id:N", legend=None),
+            tooltip=[
+                alt.Tooltip("line_id:N", title="Boundary"),
+                alt.Tooltip("description:N", title="Meaning"),
+                alt.Tooltip("y:Q", title="Premium boundary", format=".2f"),
+            ],
+        )
     )
-    layers.append(vertices_layer)
+
+# DIAGONAL INDIFFERENCE BOUNDARIES
+if not indifference_df.empty:
+    layers.append(
+        alt.Chart(indifference_df).mark_line(
+            strokeWidth=3,
+            opacity=0.95,
+        ).encode(
+            x=alt.X("x:Q", title="Regular price p₀",
+                    scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("y:Q", title="Premium price p₁",
+                    scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            detail="line_id:N",
+            order=alt.Order("x:Q"),
+            color=alt.Color("line_id:N", legend=None),
+            tooltip=[
+                alt.Tooltip("line_id:N", title="Boundary"),
+                alt.Tooltip("description:N", title="Meaning"),
+            ],
+        )
+    )
+
+# VERTICES — diamonds, with labels
+if not vertex_plot.empty:
+    layers.append(
+        alt.Chart(vertex_plot).mark_point(
+            size=130, shape="diamond", filled=True
+        ).encode(
+            x=alt.X("p_regular:Q", title="Regular price p₀",
+                    scale=alt.Scale(domain=[xmin, xmax], zero=False)),
+            y=alt.Y("p_premium:Q", title="Premium price p₁",
+                    scale=alt.Scale(domain=[ymin, ymax], zero=False)),
+            tooltip=[
+                alt.Tooltip("label:N", title="Vertex"),
+                alt.Tooltip("p_regular:Q", title="Regular", format=".2f"),
+                alt.Tooltip("p_premium:Q", title="Premium", format=".2f"),
+                alt.Tooltip("hyperplane_1:N", title="Boundary 1"),
+                alt.Tooltip("hyperplane_2:N", title="Boundary 2"),
+            ],
+        )
+    )
     layers.append(
         alt.Chart(vertex_plot).mark_text(
-            dy=-12, fontSize=10, fontWeight="bold"
+            dy=-10, fontSize=10, fontWeight="bold"
         ).encode(
             x=alt.X("p_regular:Q", scale=alt.Scale(domain=[xmin, xmax], zero=False)),
             y=alt.Y("p_premium:Q", scale=alt.Scale(domain=[ymin, ymax], zero=False)),
@@ -454,9 +535,12 @@ if not vertex_plot.empty:
         )
     )
 
+# OBSERVED WEEKLY PRICES
 if not obs_plot.empty:
     layers.append(
-        alt.Chart(obs_plot).mark_point(size=75, filled=True).encode(
+        alt.Chart(obs_plot).mark_point(
+            size=65, filled=True
+        ).encode(
             x=alt.X("p_regular:Q", title="Regular price p₀",
                     scale=alt.Scale(domain=[xmin, xmax], zero=False)),
             y=alt.Y("p_premium:Q", title="Premium price p₁",
@@ -469,10 +553,11 @@ if not obs_plot.empty:
         )
     )
 
+# SCENARIO EQUILIBRIA
 if not scenario_plot.empty:
     layers.append(
         alt.Chart(scenario_plot).mark_point(
-            size=220, shape="star", filled=True
+            size=230, shape="star", filled=True
         ).encode(
             x=alt.X("regular_price:Q", title="Regular price p₀",
                     scale=alt.Scale(domain=[xmin, xmax], zero=False)),
@@ -485,25 +570,18 @@ if not scenario_plot.empty:
             ],
         )
     )
-    layers.append(
-        alt.Chart(scenario_plot).mark_text(
-            dy=-14, fontSize=12, fontWeight="bold"
-        ).encode(
-            x=alt.X("regular_price:Q", scale=alt.Scale(domain=[xmin, xmax], zero=False)),
-            y=alt.Y("premium_price:Q", scale=alt.Scale(domain=[ymin, ymax], zero=False)),
-            text="label:N",
-        )
-    )
 
 if layers:
     st.altair_chart(
-        alt.layer(*layers).resolve_scale(x="shared", y="shared")
-        .properties(height=560)
-        .interactive(),
+        alt.layer(*layers).properties(
+            height=560,
+            title="Price-space boundaries, vertices and observed prices"
+        ).interactive(),
         use_container_width=True,
     )
 else:
     st.error("No price-space geometry was generated.")
+
 
 st.caption(
     f"Geometry shown: {lines_plot['line_id'].nunique() if not lines_plot.empty else 0} "
