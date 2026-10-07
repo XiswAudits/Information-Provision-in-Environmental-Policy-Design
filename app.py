@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -13,10 +14,9 @@ from model import (
     observed_market_outcome,
     price_vertices,
     solve_scenario,
+    validate_panel,
 )
 
-# Community Cloud executes from the repository root. Using __file__ makes the
-# data path deterministic both locally and in deployment.
 ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "data.csv"
 
@@ -29,14 +29,10 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1200px; padding-top: 1.5rem;}
-    [data-testid="stMetric"] {
-        border: 1px solid #e5e7eb; border-radius: 12px; padding: .75rem;
-    }
-    .region-card {
-        border: 1px solid #e5e7eb; border-radius: 12px;
-        padding: 14px; min-height: 150px;
-    }
+    .block-container {max-width: 1250px; padding-top: 1.5rem;}
+    [data-testid="stMetric"] {border:1px solid #e5e7eb; border-radius:12px; padding:.75rem;}
+    .region-card {border:1px solid #e5e7eb; border-radius:12px; padding:14px; min-height:145px;}
+    .legend-dot {font-size:1.15rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -67,7 +63,7 @@ except Exception as exc:
     st.exception(exc)
     st.stop()
 
-# M=2 technologies and K=1 qualifying label.
+# Two observed product types: Regular (k=0) and Premium (k=1).
 s = 2.0
 
 st.title("Information Provision Policy Lab")
@@ -78,23 +74,37 @@ st.caption(
 
 with st.sidebar:
     st.header("Model inputs")
-    st.metric("Implied stringency s", "2.0")
+    st.info(
+        "**How to read these values**\n\n"
+        "The paper defines the theoretical model, but it does not provide "
+        "the coffee-panel values below. Inputs marked as assumptions are "
+        "therefore calibration choices, not observations from the paper.\n\n"
+        "**Estimated from the panel:** household demand quantities, expenditure "
+        "bounds and the identifiable relative μ component.\n\n"
+        "**Calibrated/assumed:** production costs and environmental footprints. "
+        "The dataset contains no direct cost or footprint measurements.\n\n"
+        "**Policy calibration:** s = 2.0. The paper requires s ≥ 1 and derives "
+        "stringency from the technology/label structure; this panel does not "
+        "contain enough technology data to identify s directly.\n\n"
+        "**Welfare calibration:** γ is the environmental-damage weight."
+    )
+    st.metric("Policy stringency s", "2.0")
     margin = st.slider(
         "Variable-cost share of observed price floor",
-        0.40, 0.90, 0.70, 0.05
+        0.40, 0.90, 0.70, 0.05,
+        help="Calibration assumption: c_k is set as this share of the minimum observed price for product k. It is not estimated from the paper or directly observed in the panel.",
     )
     phi_regular = st.number_input(
-        "Regular footprint φ₀", min_value=0.01, value=17.50, step=0.50
+        "Regular footprint φ₀", min_value=0.01, value=17.50, step=0.50,
+        help="Calibration assumption. The purchase panel contains no lifecycle/environmental-footprint measurement.",
     )
     phi_premium = st.number_input(
-        "Premium footprint φ₁", min_value=0.01, value=3.50, step=0.50
+        "Premium footprint φ₁", min_value=0.01, value=3.50, step=0.50,
+        help="Calibration assumption. Lower than Regular here to represent the intended environmental ordering.",
     )
     gamma = st.number_input(
-        "Environmental weight γ", min_value=0.0, value=0.90, step=0.10
-    )
-    st.caption(
-        "Costs are calibrated from observed price floors. Footprints are "
-        "explicit inputs because the purchase panel has no direct footprint data."
+        "Environmental damage weight γ", min_value=0.0, value=0.90, step=0.10,
+        help="Welfare parameter from the theoretical model; 0.90 is a calibration choice for this empirical exercise.",
     )
 
 tech = TechParams(
@@ -115,12 +125,11 @@ m[3].metric("Premium price floor", f"{df.p_premium.min():.0f}")
 with st.expander("How the 3-level model works", expanded=True):
     st.markdown(
         """
-**Level 1 — Government:** chooses the information / certification design
-and, in the mandatory case, the policy prices.
+**Level 1 — Government:** chooses the information/certification design and,
+depending on the scenario, evaluates prices and welfare.
 
-**Level 2 — Industry:** under CI/LI, chooses prices to maximize aggregate
-profit; under voluntary labelling, the producer disclosure response is
-evaluated before consumer demand.
+**Level 2 — Industry:** under CI/LI, industry pricing is explicitly
+evaluated as a profit-maximization step.
 
 **Level 3 — Consumers:** each household chooses Regular, Premium, or Exit
 using the calibrated money-metric utility
@@ -131,9 +140,9 @@ Social welfare is
 
 $$W=\sum_j\ln(\omega_j+1)+\Pi-\gamma\Phi.$$
 
-For K=1, the price space is two-dimensional. Bounding and indifference
-hyperplanes partition $(p_0,p_1)$ into demand regions; candidate equilibria
-are evaluated at the resulting vertices.
+For two product types, price space is the $(p_0,p_1)$ plane. The paper
+partitions this space using bounding and indifference hyperplanes and shows
+that candidate optimal prices can be found at price vertices.
 """
     )
 
@@ -141,7 +150,6 @@ are evaluated at the resulting vertices.
 # 1. Parameter estimation
 # ---------------------------------------------------------------------------
 st.header("1. Parameter Estimation")
-
 param_rows = []
 for c in consumers:
     param_rows.append(
@@ -157,14 +165,10 @@ for c in consumers:
         }
     )
 
-st.dataframe(
-    pd.DataFrame(param_rows).round(2),
-    use_container_width=True,
-    hide_index=True,
-)
+st.dataframe(pd.DataFrame(param_rows).round(2), use_container_width=True, hide_index=True)
 st.caption(
-    "Budgets are anchored at maximum observed expenditure. Only μ₁−μ₀ "
-    "is identified by binary switching, so μ₀ is normalized to zero."
+    "Budgets are anchored at maximum observed expenditure. Only the relative "
+    "Premium-vs-Regular μ component is identified by switching, so μ₀ is normalized to zero."
 )
 
 # ---------------------------------------------------------------------------
@@ -172,130 +176,87 @@ st.caption(
 # ---------------------------------------------------------------------------
 st.header("2. Inferred Price-Space Partitioning & Vertices")
 st.markdown(
-    "The calibrated bounding and indifference hyperplanes partition the "
-    "$(p_0,p_1)$ plane. The chart overlays theoretical vertices and the "
-    "11 observed weekly price combinations."
+    "This is the part of the app where the geometry should be visible. "
+    "The lines are the actual calibrated bounding and indifference hyperplanes; "
+    "their intersections are the model's price vertices. The observed weeks "
+    "and scenario equilibria are overlaid so every point has a clear meaning."
 )
 
 hp = hyperplanes(consumers, s)
 vertices = price_vertices(consumers, s)
 
-if vertices.empty:
-    st.warning("No non-negative price vertices were generated under the current calibration.")
-else:
-    chart_vertices = vertices[["p_regular", "p_premium"]].copy()
-    chart_vertices.columns = ["Regular price", "Premium price"]
-    chart_observed = df[["p_regular", "p_premium"]].copy()
-    chart_observed.columns = ["Regular price", "Premium price"]
+# Build a readable plotting window around the observed data and model vertices.
+all_x = list(df.p_regular.astype(float))
+all_y = list(df.p_premium.astype(float))
+if not vertices.empty:
+    all_x += list(vertices.p_regular.astype(float))
+    all_y += list(vertices.p_premium.astype(float))
+x_min = 0.0
+x_max = max(all_x) * 1.05
+y_min = 0.0
+y_max = max(all_y) * 1.05
 
-    st.caption("Model vertices")
-    st.scatter_chart(
-        chart_vertices,
-        x="Regular price",
-        y="Premium price",
-        height=420,
-    )
-    st.caption("Observed weekly price combinations")
-    st.dataframe(
-        chart_observed.assign(
-            **{
-                "Empirical threshold": np.where(
-                    chart_observed["Premium price"] > 81,
-                    "A — High Premium / H3 Exit",
-                    np.where(
-                        (chart_observed["Premium price"] >= 80)
-                        & (chart_observed["Premium price"] <= 81)
-                        & (chart_observed["Regular price"] <= 55),
-                        "B — Intermediate / H3 Premium",
-                        np.where(
-                            chart_observed["Premium price"] <= 75,
-                            "C — Low Premium / Premium Adoption",
-                            "Outside core regions",
-                        ),
-                    ),
-                )
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
+# Hyperplanes -> explicit line segments in the plotting window.
+line_rows = []
+for idx, r in hp.iterrows():
+    kind = r["kind"]
+    if kind == "Bounding":
+        if abs(r["a"]) > 1e-12:
+            x = r["rhs"] / r["a"]
+            if x_min <= x <= x_max:
+                line_rows += [
+                    {"line": f"B{idx+1} · {r['household']} · Regular affordability", "x": x, "y": y_min},
+                    {"line": f"B{idx+1} · {r['household']} · Regular affordability", "x": x, "y": y_max},
+                ]
+        elif abs(r["b"]) > 1e-12:
+            y = r["rhs"] / r["b"]
+            if y_min <= y <= y_max:
+                line_rows += [
+                    {"line": f"B{idx+1} · {r['household']} · Premium affordability", "x": x_min, "y": y},
+                    {"line": f"B{idx+1} · {r['household']} · Premium affordability", "x": x_max, "y": y},
+                ]
+    else:
+        if abs(r["b"]) > 1e-12:
+            xs = np.linspace(x_min, x_max, 120)
+            ys = (r["rhs"] - r["a"] * xs) / r["b"]
+            for x, y in zip(xs, ys):
+                if y_min <= y <= y_max:
+                    line_rows.append(
+                        {"line": f"I{idx+1} · {r['household']} · Indifference", "x": float(x), "y": float(y)}
+                    )
+
+lines_df = pd.DataFrame(line_rows)
+
+obs_plot = df[["T", "p_regular", "p_premium"]].copy()
+obs_plot["Type"] = "Observed week"
+obs_plot["Label"] = obs_plot["T"].map(lambda x: f"Week {int(x)}")
+
+vertex_plot = pd.DataFrame()
+if not vertices.empty:
+    vertex_plot = vertices[["p_regular", "p_premium"]].copy()
+    vertex_plot["Type"] = "Model vertex"
+    vertex_plot["Label"] = [f"V{i+1}" for i in range(len(vertex_plot))]
 
 st.subheader("2A. Bounding & indifference hyperplanes")
+st.markdown(
+    "**How to read it:** vertical lines are Regular affordability bounds; "
+    "horizontal lines are Premium affordability bounds; diagonal lines are "
+    "Regular-vs-Premium indifference boundaries. **A model vertex is where two "
+    "or more of these boundaries intersect.**"
+)
 st.dataframe(
     hp[["kind", "household", "equation"]],
     use_container_width=True,
     hide_index=True,
 )
 
-st.subheader("2B. Empirical demand regions")
-st.caption(
-    "These are inferred switch regions from the observed panel, not claimed "
-    "to be exact structural parameters of the theoretical paper."
-)
-region_df = empirical_regions(df)
-st.dataframe(region_df, use_container_width=True, hide_index=True)
-
-cols = st.columns(3)
-region_cards = [
-    (
-        "A · High Premium Price",
-        "p₁ > 81",
-        "H1 + H2 buy Regular; H3 exits.",
-        "Observed weeks: 7, 8, 9",
-    ),
-    (
-        "B · Intermediate Premium Price",
-        "80 ≤ p₁ ≤ 81 and p₀ ≤ 55",
-        "H1 + H2 buy Regular; H3 buys Premium.",
-        "Observed weeks: 2, 6, 11",
-    ),
-    (
-        "C · Low Premium Price",
-        "p₁ ≤ 75",
-        "Premium adoption rises; H3 remains active.",
-        "Observed weeks: 1, 4, 5, 10",
-    ),
-]
-for col, (title, condition, behavior, weeks) in zip(cols, region_cards):
-    col.markdown(
-        f'<div class="region-card"><b>{title}</b><br><br>'
-        f'<b>Condition:</b> {condition}<br>'
-        f'<b>Behavior:</b> {behavior}<br>'
-        f'<b>{weeks}</b></div>',
-        unsafe_allow_html=True,
-    )
-
-st.subheader("2C. Week-by-week empirical classification")
-def classify_region(row):
-    if row.p_premium > 81:
-        return "A — High Premium / H3 Exit"
-    if 80 <= row.p_premium <= 81 and row.p_regular <= 55:
-        return "B — Intermediate / H3 Premium"
-    if row.p_premium <= 75:
-        return "C — Low Premium / Premium Adoption"
-    return "Outside the three core empirical regions"
-
-weekly_regions = df[["T", "p_regular", "p_premium"]].copy()
-weekly_regions["Region"] = weekly_regions.apply(classify_region, axis=1)
-weekly_regions.columns = ["Week", "p₀ Regular", "p₁ Premium", "Empirical region"]
-st.dataframe(
-    weekly_regions,
-    use_container_width=True,
-    hide_index=True,
-)
-
-# ---------------------------------------------------------------------------
-# 3. Four scenarios
-# ---------------------------------------------------------------------------
-st.header("3. Equilibrium Analysis Across Policy Scenarios")
-
+# Compute scenarios before the main geometry chart so they can be shown on it.
 scenario_names = {
     "C": "Mandatory Certification",
     "L": "Voluntary Labelling",
     "CI": "Certification + Industry Pricing",
     "LI": "Voluntary Labelling + Industry Pricing",
 }
-
 results = []
 for code, label in scenario_names.items():
     try:
@@ -319,42 +280,182 @@ for code, label in scenario_names.items():
         results.append({"Code": code, "Scenario": label, "Error": str(exc)})
 
 scenario_df = pd.DataFrame(results)
-st.dataframe(
-    scenario_df.round(2),
-    use_container_width=True,
-    hide_index=True,
+valid_scenarios = scenario_df[scenario_df.get("p₀", pd.Series(dtype=float)).notna()].copy() if "p₀" in scenario_df else pd.DataFrame()
+
+scenario_plot = pd.DataFrame()
+if not valid_scenarios.empty:
+    scenario_plot = valid_scenarios[["Code", "p₀", "p₁"]].copy()
+    scenario_plot["Type"] = "Scenario equilibrium"
+    scenario_plot["Label"] = scenario_plot["Code"]
+
+# Layered Altair chart: boundaries + vertices + observed weeks + scenario points.
+base = alt.Chart(pd.DataFrame({"x": [], "y": []})).properties(height=520)
+if not lines_df.empty:
+    line_chart = (
+        alt.Chart(lines_df)
+        .mark_line(opacity=0.35)
+        .encode(
+            x=alt.X("x:Q", title="Regular price p₀", scale=alt.Scale(domain=[x_min, x_max])),
+            y=alt.Y("y:Q", title="Premium price p₁", scale=alt.Scale(domain=[y_min, y_max])),
+            detail="line:N",
+            tooltip=["line:N", alt.Tooltip("x:Q", format=".2f"), alt.Tooltip("y:Q", format=".2f")],
+        )
+    )
+else:
+    line_chart = base
+
+layers = [line_chart]
+
+if not vertex_plot.empty:
+    layers.append(
+        alt.Chart(vertex_plot).mark_point(size=70, shape="diamond").encode(
+            x="p_regular:Q", y="p_premium:Q",
+            tooltip=[alt.Tooltip("Label:N"), alt.Tooltip("p_regular:Q", title="Regular"), alt.Tooltip("p_premium:Q", title="Premium")],
+        )
+    )
+    layers.append(
+        alt.Chart(vertex_plot).mark_text(dy=-10, fontSize=10).encode(
+            x="p_regular:Q", y="p_premium:Q", text="Label:N"
+        )
+    )
+
+layers.append(
+    alt.Chart(obs_plot).mark_point(size=70, filled=True).encode(
+        x="p_regular:Q", y="p_premium:Q",
+        tooltip=[
+            alt.Tooltip("Label:N"),
+            alt.Tooltip("p_regular:Q", title="Regular price"),
+            alt.Tooltip("p_premium:Q", title="Premium price"),
+        ],
+    )
+)
+layers.append(
+    alt.Chart(obs_plot).mark_text(dy=10, fontSize=9).encode(
+        x="p_regular:Q", y="p_premium:Q", text="Label:N"
+    )
 )
 
-st.subheader("3A. Scenario interpretation")
+if not scenario_plot.empty:
+    layers.append(
+        alt.Chart(scenario_plot).mark_point(size=170, shape="star").encode(
+            x="p₀:Q", y="p₁:Q",
+            tooltip=[
+                alt.Tooltip("Code:N", title="Scenario"),
+                alt.Tooltip("p₀:Q", title="Regular equilibrium"),
+                alt.Tooltip("p₁:Q", title="Premium equilibrium"),
+            ],
+        )
+    )
+    layers.append(
+        alt.Chart(scenario_plot).mark_text(dy=-13, fontSize=12, fontWeight="bold").encode(
+            x="p₀:Q", y="p₁:Q", text="Code:N"
+        )
+    )
+
+st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
+
+st.caption(
+    "Legend: ♦ = model price vertex; ● = observed weekly price combination; "
+    "★ = scenario equilibrium. Hover over any line to see which household "
+    "boundary generated it, and hover over V1, V2, etc. to inspect the vertex."
+)
+
+st.subheader("2B. Empirical demand regions")
+st.info(
+    "**Important distinction:** these are **market regions**, not separate "
+    "regions for each household. One region represents **one combined pattern "
+    "of consumer decisions across all three households** at the observed prices. "
+    "Section 2B is empirically constructed from the panel: for every week, we "
+    "translate each household's observed Regular/Premium quantities into a "
+    "choice state (Regular, Premium, Both, or Exit), then group weeks that have "
+    "the same joint household-choice signature. These regions are therefore "
+    "descriptive empirical regions, not theoretical regions derived from the "
+    "paper's hyperplanes."
+)
+region_df = empirical_regions(df)
+st.dataframe(region_df, use_container_width=True, hide_index=True)
+
+st.subheader("2C. Week-by-week model validation")
+st.markdown(
+    "This section is now a direct consequence of the calibrated utility model "
+    "rather than a hand-written price threshold. For every observed week and "
+    "household, the app evaluates Regular utility, Premium utility and Exit, "
+    "then compares the model-implied choice with the observed choice."
+)
+validation_df = validate_panel(df, consumers, s=s)
+comparable = validation_df[validation_df["Comparable"] == "Yes"].copy()
+match_rate = float(comparable["Match"].mean()) if not comparable.empty else np.nan
+v1, v2, v3 = st.columns(3)
+v1.metric("Household-week observations", len(validation_df))
+v2.metric("Comparable to single-choice model", len(comparable))
+v3.metric("Model match rate", "N/A" if np.isnan(match_rate) else f"{100*match_rate:.1f}%")
+st.caption(
+    "Weeks where a household buys both products are shown explicitly as 'Both'. "
+    "They are not counted as a literal match because the paper's consumer problem "
+    "chooses one product type or Exit."
+)
+st.dataframe(validation_df.round(2), use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# 3. Four scenarios
+# ---------------------------------------------------------------------------
+st.header("3. Equilibrium Analysis Across Policy Scenarios")
+st.markdown(
+    "Each scenario is a **point in the same (p₀, p₁) price space**. "
+    "The table and chart below therefore report both the Regular and Premium "
+    "equilibrium prices for every scenario."
+)
+st.dataframe(scenario_df.round(2), use_container_width=True, hide_index=True)
+
+if not scenario_plot.empty:
+    st.subheader("3A. Scenario equilibria in price space")
+    st.markdown(
+        "The ★ markers are the four scenario outcomes: **C**, **L**, **CI**, "
+        "and **LI**. Their coordinates are the model's equilibrium Regular "
+        "and Premium prices under the current calibration."
+    )
+    st.altair_chart(
+        alt.Chart(scenario_plot)
+        .mark_point(size=220, shape="star")
+        .encode(
+            x=alt.X("p₀:Q", title="Regular equilibrium price p₀"),
+            y=alt.Y("p₁:Q", title="Premium equilibrium price p₁"),
+            text="Code:N",
+            tooltip=[
+                "Code:N",
+                alt.Tooltip("p₀:Q", title="Regular"),
+                alt.Tooltip("p₁:Q", title="Premium"),
+            ],
+        )
+        .properties(height=420)
+        .interactive(),
+        use_container_width=True,
+    )
+
+st.subheader("3B. Scenario interpretation")
 st.markdown(
     """
-- **C — Mandatory Certification:** government welfare objective evaluated
-  under the mandatory clean-label assignment.
-- **L — Voluntary Labelling:** government anticipates the producer's
-  disclosure response before evaluating welfare.
-- **CI — Certification + Industry Pricing:** industry selects the
-  profit-maximizing feasible price vertex.
-- **LI — Voluntary Labelling + Industry Pricing:** industry pricing is
-  evaluated for each admissible voluntary disclosure mapping, followed by
-  the welfare comparison.
+- **C — Mandatory Certification:** government selects the policy outcome
+  directly under mandatory certification.
+- **L — Voluntary Labelling:** producer/label responses are considered before
+  the government compares welfare.
+- **CI — Certification + Industry Pricing:** industry chooses the
+  profit-maximizing price vertex given the certification structure.
+- **LI — Voluntary Labelling + Industry Pricing:** industry pricing and
+  voluntary disclosure are evaluated before the welfare comparison.
 """
 )
 
 # ---------------------------------------------------------------------------
 # 4. Historical validation
 # ---------------------------------------------------------------------------
-st.header("4. Empirical Comparison: Observed vs. C and CI")
-
+st.header("4. Empirical Comparison: Observed vs. Scenario Equilibria")
 observed = observed_market_outcome(df, consumers, tech, s=s)
 c = next((r for r in results if r.get("Code") == "C" and "p₀" in r), None)
 ci = next((r for r in results if r.get("Code") == "CI" and "p₀" in r), None)
 
 summary = df[["T", "p_regular", "p_premium"]].rename(
-    columns={
-        "T": "Week",
-        "p_regular": "Observed p₀",
-        "p_premium": "Observed p₁",
-    }
+    columns={"T": "Week", "p_regular": "Observed p₀", "p_premium": "Observed p₁"}
 ).copy()
 
 if c and ci:
@@ -363,111 +464,99 @@ if c and ci:
     summary["CI p₀"] = ci["p₀"]
     summary["CI p₁"] = ci["p₁"]
     summary["Distance → C"] = np.hypot(
-        summary["Observed p₀"] - c["p₀"],
-        summary["Observed p₁"] - c["p₁"],
+        summary["Observed p₀"] - c["p₀"], summary["Observed p₁"] - c["p₁"]
     )
     summary["Distance → CI"] = np.hypot(
-        summary["Observed p₀"] - ci["p₀"],
-        summary["Observed p₁"] - ci["p₁"],
+        summary["Observed p₀"] - ci["p₀"], summary["Observed p₁"] - ci["p₁"]
     )
+    st.dataframe(summary.round(2), use_container_width=True, hide_index=True)
 
-st.dataframe(summary.round(2), use_container_width=True, hide_index=True)
-
-if c and ci:
     comparison = pd.DataFrame(
         [
-            [
-                "Observed historical",
-                df.p_regular.mean(),
-                df.p_premium.mean(),
-                observed.profit.mean(),
-                observed.welfare.mean(),
-            ],
-            [
-                "Scenario C",
-                c["p₀"],
-                c["p₁"],
-                c["Industry profit Π"],
-                c["Welfare W"],
-            ],
-            [
-                "Scenario CI",
-                ci["p₀"],
-                ci["p₁"],
-                ci["Industry profit Π"],
-                ci["Welfare W"],
-            ],
+            ["Observed historical", df.p_regular.mean(), df.p_premium.mean(), observed.profit.mean(), observed.welfare.mean()],
+            ["Scenario C", c["p₀"], c["p₁"], c["Industry profit Π"], c["Welfare W"]],
+            ["Scenario CI", ci["p₀"], ci["p₁"], ci["Industry profit Π"], ci["Welfare W"]],
         ],
-        columns=[
-            "Outcome",
-            "Regular price",
-            "Premium price",
-            "Industry profit",
-            "Social welfare",
-        ],
+        columns=["Outcome", "Regular price", "Premium price", "Industry profit", "Social welfare"],
     )
-
     st.subheader("4A. Predicted vs. observed summary")
-    st.dataframe(
-        comparison.round(2),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    chart_comparison = comparison.set_index("Outcome")[["Regular price", "Premium price"]]
-    st.bar_chart(chart_comparison, height=350)
-
+    st.dataframe(comparison.round(2), use_container_width=True, hide_index=True)
 
     a, b = st.columns(2)
     a.metric("Mean observed → C price distance", f"{summary['Distance → C'].mean():.2f}")
     b.metric("Mean observed → CI price distance", f"{summary['Distance → CI'].mean():.2f}")
-else:
-    st.warning(
-        "C/CI results could not be produced under the current calibration. "
-        "Check the scenario error column above."
+
+    st.info(
+        "**Interpretation:** price distance measures market realism/fit; it does "
+        "not mean the closest scenario is automatically the socially optimal one. "
+        "Welfare and profit answer different questions."
     )
 
 # ---------------------------------------------------------------------------
-# 5. Key takeaway
+# 5. Market realism, profitability and welfare
 # ---------------------------------------------------------------------------
-st.header("5. Key Takeaway")
-st.markdown(
-    """
-**The empirical panel illustrates a clear price-space mechanism:**
+st.header("5. Market Realism, Profitability & Social Welfare")
 
-1. When **p₁ > 81**, Household 3 exits while Households 1–2 remain on Regular.
-2. In the **80–81 intermediate band**, Household 3 can remain on Premium.
-3. At **p₁ ≤ 75**, Premium adoption expands materially.
+if not valid_scenarios.empty:
+    realism_rows = []
+    mean_p0 = float(df.p_regular.mean())
+    mean_p1 = float(df.p_premium.mean())
+    for _, r in valid_scenarios.iterrows():
+        dist = float(np.hypot(r["p₀"] - mean_p0, r["p₁"] - mean_p1))
+        realism_rows.append(
+            {
+                "Scenario": r["Code"],
+                "Equilibrium Regular p₀": r["p₀"],
+                "Equilibrium Premium p₁": r["p₁"],
+                "Distance from observed mean": dist,
+                "Industry profit Π": r["Industry profit Π"],
+                "Social welfare W": r["Welfare W"],
+            }
+        )
+    realism = pd.DataFrame(realism_rows).sort_values("Distance from observed mean")
+    st.subheader("Market realism")
+    st.markdown("**Which scenario resembles observed prices?**")
+    st.dataframe(realism.round(2), use_container_width=True, hide_index=True)
+    st.success(
+        f"Closest to the observed mean price vector: **{realism.iloc[0]['Scenario']}** "
+        f"(Euclidean distance {realism.iloc[0]['Distance from observed mean']:.2f})."
+    )
 
-Therefore, voluntary pricing can create a market-exclusion trade-off for the
-lower-impact segment when the Premium price crosses its inferred threshold.
-Certification changes the feasible policy space by constraining how the
-environmental information is disclosed and priced.
+    st.subheader("Profitability")
+    best_profit = valid_scenarios.loc[valid_scenarios["Industry profit Π"].idxmax()]
+    st.markdown("**Which produces the highest Π?**")
+    st.metric("Highest industry profit", f"{best_profit['Code']} — Π = {best_profit['Industry profit Π']:.2f}")
 
-The exact welfare-maximizing $(p_0,p_1)$ point is **computed by the model**
-rather than hard-coded from the historical panel.
-"""
-)
+    st.subheader("Social welfare")
+    best_welfare = valid_scenarios.loc[valid_scenarios["Welfare W"].idxmax()]
+    st.markdown("**Which produces the highest W?**")
+    st.metric("Highest social welfare", f"{best_welfare['Code']} — W = {best_welfare['Welfare W']:.2f}")
+
+    st.info(
+        "These three rankings are deliberately kept separate: a scenario can be "
+        "most realistic in price space, most profitable for industry, or best for "
+        "social welfare. They need not be the same."
+    )
 
 # ---------------------------------------------------------------------------
 # 6. Identification / limitations
 # ---------------------------------------------------------------------------
-st.header("6. Validation & Identification Notes")
+st.header("6. Identification & Model-Input Notes")
 st.markdown(
     """
-**Observed:** prices, quantities, expenditures and switching behavior.
+**From the observed panel:** prices, quantities, expenditures and switching behavior.
 
-**Estimated:** household demand quantities, expenditure-based budget bounds,
-and the identifiable Premium-vs-Regular μ difference.
+**Estimated/calibrated from the panel:** household demand quantities, expenditure-based
+budget bounds and the identifiable relative μ component.
 
-**Calibrated rather than identified:** variable costs and environmental
-footprints. The supplied panel contains no direct production-cost or
-environmental-footprint measurements, so these assumptions remain explicit
-sidebar inputs.
+**Not identified by this dataset:** production costs, environmental footprints,
+technology delimiters and the underlying technology composition used to derive
+policy stringency in the original framework. These are therefore explicit
+calibration assumptions in this empirical adaptation.
 
-**Validation target:** reproduce the observed demand partition and compare
-historical prices with the theoretical C/CI equilibrium candidates without
-pretending that unobserved environmental or cost parameters were measured.
+**Important:** the theoretical paper supplies the model structure and solution
+logic; the numerical coffee-panel values are part of this empirical adaptation,
+not values reported by Danilina & Grigoriev (2020).
 """
 )
 
