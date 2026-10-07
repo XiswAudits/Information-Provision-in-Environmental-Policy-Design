@@ -14,8 +14,51 @@ from model import (
     observed_market_outcome,
     price_vertices,
     solve_scenario,
-    validate_panel,
 )
+
+
+
+def validate_panel(df, consumers, s=2.0):
+    """Validate observed choices against the calibrated consumer utility.
+
+    Kept in app.py so the UI remains robust if Streamlit serves a cached
+    model.py from an earlier deployment revision.
+    """
+    consumer_by_name = {c.name: c for c in consumers}
+    rows = []
+    for r in df.itertuples(index=False):
+        for i in range(1, 4):
+            c = consumer_by_name[f"Household {i}"]
+            q0 = getattr(r, f"h{i}_regular")
+            q1 = getattr(r, f"h{i}_premium")
+            if q0 > 0 and q1 > 0:
+                observed = "Both"
+            elif q0 > 0:
+                observed = "Regular"
+            elif q1 > 0:
+                observed = "Premium"
+            else:
+                observed = "Exit"
+            u0 = c.b0 - r.p_regular * c.d0 + c.mu0 * s
+            u1 = c.b1 - r.p_premium * c.d1 + c.mu1 * s
+            predicted_code, predicted_utility = model_choice = (
+                int(np.argmax([0.0, u0, u1])) - 1,
+                float(max(0.0, u0, u1)),
+            )
+            predicted = {-1: "Exit", 0: "Regular", 1: "Premium"}[predicted_code]
+            comparable = observed != "Both"
+            rows.append({
+                "Week": int(r.T),
+                "Household": c.name,
+                "Observed choice": observed,
+                "Predicted choice": predicted,
+                "u₀ Regular": u0,
+                "u₁ Premium": u1,
+                "Predicted utility": predicted_utility,
+                "Comparable": "Yes" if comparable else "No — both products observed",
+                "Match": bool(predicted == observed) if comparable else np.nan,
+            })
+    return pd.DataFrame(rows)
 
 ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "data.csv"
