@@ -512,31 +512,62 @@ if not valid_scenarios.empty:
     st.subheader("3A. Scenario equilibria in price space")
     st.info(
         "**How to read this graph:** x-axis = Regular equilibrium price p₀; "
-        "y-axis = Premium equilibrium price p₁. Each ★ is one scenario. "
-        "For example, if ★ CI is at (45, 80), that means the CI scenario's "
-        "equilibrium is Regular = 45 and Premium = 80. The four points can be "
-        "compared directly with the observed weekly price points in Section 2."
+        "y-axis = Premium equilibrium price p₁. Each **● labeled point is one scenario**. "
+        "For example, if **CI** is at (45, 80), the CI equilibrium is Regular = 45 "
+        "and Premium = 80."
     )
-    # Explicit numeric coercion prevents Altair from silently dropping points
-    # when values arrive from pandas as object/string types.
-    scenario_plot = scenario_plot.copy()
-    scenario_plot["regular_price"] = pd.to_numeric(scenario_plot["regular_price"], errors="coerce")
-    scenario_plot["premium_price"] = pd.to_numeric(scenario_plot["premium_price"], errors="coerce")
-    scenario_plot = scenario_plot.dropna(subset=["regular_price", "premium_price"])
 
-    if not scenario_plot.empty:
-        xlo = min(float(df.p_regular.min()), float(scenario_plot["regular_price"].min())) * 0.95
-        xhi = max(float(df.p_regular.max()), float(scenario_plot["regular_price"].max())) * 1.05
-        ylo = min(float(df.p_premium.min()), float(scenario_plot["premium_price"].min())) * 0.95
-        yhi = max(float(df.p_premium.max()), float(scenario_plot["premium_price"].max())) * 1.05
+    # Build a completely fresh plotting frame. The previous implementation
+    # could create a valid dataframe but render an apparently empty layer.
+    plot3a = valid_scenarios[["Code", "regular_price", "premium_price"]].copy()
+    plot3a["regular_price"] = pd.to_numeric(plot3a["regular_price"], errors="coerce")
+    plot3a["premium_price"] = pd.to_numeric(plot3a["premium_price"], errors="coerce")
+    plot3a = plot3a.dropna(subset=["regular_price", "premium_price"]).reset_index(drop=True)
+    plot3a["label"] = plot3a["Code"].astype(str)
 
-        points = alt.Chart(scenario_plot).mark_point(
-            size=260, shape="star", filled=True
-        ).encode(
-            x=alt.X("regular_price:Q", title="Regular equilibrium price p₀",
-                    scale=alt.Scale(domain=[xlo, xhi])),
-            y=alt.Y("premium_price:Q", title="Premium equilibrium price p₁",
-                    scale=alt.Scale(domain=[ylo, yhi])),
+    # Show the exact coordinates immediately above the graph. This makes it
+    # impossible for a blank visual to hide whether the solver returned points.
+    display3a = plot3a.rename(
+        columns={
+            "Code": "Scenario",
+            "regular_price": "Regular equilibrium p₀",
+            "premium_price": "Premium equilibrium p₁",
+        }
+    )
+    st.dataframe(
+        display3a[["Scenario", "Regular equilibrium p₀", "Premium equilibrium p₁"]].round(2),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if plot3a.empty:
+        st.error(
+            "The scenario solver returned no numeric equilibrium coordinates. "
+            "The table above should show the solver output/error."
+        )
+    else:
+        # Use one shared chart specification for points and labels. Explicit
+        # domains are based ONLY on the plotted scenario coordinates, with a
+        # small padding, so every returned equilibrium must be inside the view.
+        xmin = float(plot3a["regular_price"].min())
+        xmax = float(plot3a["regular_price"].max())
+        ymin = float(plot3a["premium_price"].min())
+        ymax = float(plot3a["premium_price"].max())
+
+        xpad = max((xmax - xmin) * 0.20, 2.0)
+        ypad = max((ymax - ymin) * 0.20, 2.0)
+
+        base = alt.Chart(plot3a).encode(
+            x=alt.X(
+                "regular_price:Q",
+                title="Regular equilibrium price p₀",
+                scale=alt.Scale(domain=[xmin - xpad, xmax + xpad], zero=False),
+            ),
+            y=alt.Y(
+                "premium_price:Q",
+                title="Premium equilibrium price p₁",
+                scale=alt.Scale(domain=[ymin - ypad, ymax + ypad], zero=False),
+            ),
             tooltip=[
                 alt.Tooltip("Code:N", title="Scenario"),
                 alt.Tooltip("regular_price:Q", title="Regular equilibrium", format=".2f"),
@@ -544,22 +575,25 @@ if not valid_scenarios.empty:
             ],
         )
 
-        labels = alt.Chart(scenario_plot).mark_text(
-            dy=-16, fontSize=13, fontWeight="bold"
-        ).encode(
-            x="regular_price:Q",
-            y="premium_price:Q",
-            text="label:N",
-        )
+        points = base.mark_circle(size=220, opacity=1)
+        labels = base.mark_text(
+            dy=-16,
+            fontSize=14,
+            fontWeight="bold",
+        ).encode(text=alt.Text("label:N"))
 
         st.altair_chart(
-            (points + labels).properties(height=450).interactive(),
+            (points + labels).properties(
+                height=450,
+                title="Four scenario equilibrium points"
+            ).interactive(),
             use_container_width=True,
         )
-    else:
-        st.warning(
-            "The scenario solver returned rows, but none contains a valid numeric "
-            "Regular/Premium equilibrium price. Check the Scenario table above."
+
+        st.caption(
+            "Each point is a complete price vector (p₀*, p₁*). "
+            "The four points are C, L, CI and LI. If two scenarios overlap, "
+            "their labels will identify the same coordinate."
         )
 else:
     st.error(
