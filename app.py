@@ -583,9 +583,14 @@ else:
     st.error("No price-space geometry was generated.")
 
 
+boundary_count = (
+    (vertical_df["line_id"].nunique() if not vertical_df.empty else 0)
+    + (horizontal_df["line_id"].nunique() if not horizontal_df.empty else 0)
+    + (indifference_df["line_id"].nunique() if not indifference_df.empty else 0)
+)
 st.caption(
-    f"Geometry shown: {lines_plot['line_id'].nunique() if not lines_plot.empty else 0} "
-    f"boundaries · {len(vertex_plot)} vertices · {len(obs_plot)} observed weeks. "
+    f"Geometry shown: {boundary_count} boundaries · {len(vertex_plot)} vertices · "
+    f"{len(obs_plot)} observed weeks. "
     "Legend: ◆ model vertex | ● observed weekly price | ★ scenario equilibrium."
 )
 
