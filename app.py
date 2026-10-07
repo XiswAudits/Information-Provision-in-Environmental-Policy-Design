@@ -167,7 +167,7 @@ m[3].metric("Premium price floor", f"{df.p_premium.min():.0f}")
 
 with st.expander("How the 3-level model works", expanded=True):
     st.markdown(
-        """
+        r"""
 **Level 1 — Government:** chooses the information/certification design and,
 depending on the scenario, evaluates prices and welfare.
 
